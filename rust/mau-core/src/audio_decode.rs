@@ -66,6 +66,7 @@ mod imp {
     extern "C" {
         fn AudioConverterNew(source: *const Format, destination: *const Format, converter: *mut AudioConverterRef) -> OSStatus;
         fn AudioConverterDispose(converter: AudioConverterRef) -> OSStatus;
+        fn AudioConverterSetProperty(converter: AudioConverterRef, property: u32, size: u32, data: *const c_void) -> OSStatus;
         fn AudioConverterFillComplexBuffer(
             converter: AudioConverterRef,
             input: InputProc,
@@ -81,6 +82,24 @@ mod imp {
     const FORMAT_EAC3: u32 = 0x6563_2D33; // 'ec-3'
     const FORMAT_LPCM: u32 = 0x6C70_636D; // 'lpcm'
     const FLAG_FLOAT_PACKED: u32 = 1 | 8;
+    const MAGIC_COOKIE: u32 = 0x646D_6763; // 'dmgc', the decompression cookie
+
+    /// The AudioSpecificConfig `asc` in an `esds` box (ISO/IEC 14496-1 descriptors), as an MP4 holds it.
+    pub(super) fn esds_box(asc: &[u8]) -> Vec<u8> {
+        let mut dsi = vec![0x05, asc.len() as u8];
+        dsi.extend_from_slice(asc);
+        // objectType 0x40 (AAC), streamType 0x15 (audio), buffer size (3), max and average bitrate (4 each)
+        let mut dcd = vec![0x04, (13 + dsi.len()) as u8, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        dcd.extend_from_slice(&dsi);
+        let mut es = vec![0x03, (3 + dcd.len() + 3) as u8, 0, 0, 0];
+        es.extend_from_slice(&dcd);
+        es.extend_from_slice(&[0x06, 0x01, 0x02]);
+        let mut out = vec![0, 0, 0, (12 + es.len()) as u8];
+        out.extend_from_slice(b"esds");
+        out.extend_from_slice(&[0, 0, 0, 0]);
+        out.extend_from_slice(&es);
+        out
+    }
 
     struct Input {
         packets: Vec<Vec<u8>>,
@@ -115,7 +134,10 @@ mod imp {
     }
 
     /// Decode the packets to 16 kHz mono samples.
-    pub fn decode(codec: Codec, sample_rate: f64, channels: u32, packets: &[Vec<u8>]) -> io::Result<Vec<f32>> {
+    /// `config` is the codec's setup data (the AudioSpecificConfig, for AAC). The converter needs it to decode
+    /// HE-AAC: without it AudioToolbox refuses the frames. The converter takes it inside an `esds` box, as an MP4
+    /// has it, and the AAC-LC files checked decode the same with or without the box.
+    pub fn decode(codec: Codec, sample_rate: f64, channels: u32, packets: &[Vec<u8>], config: Option<&[u8]>) -> io::Result<Vec<f32>> {
         let (format_id, frames_per_packet) = match codec {
             Codec::Aac => (FORMAT_AAC, 1024),
             Codec::Ac3 => (FORMAT_AC3, 1536),
@@ -148,6 +170,16 @@ mod imp {
         let status = unsafe { AudioConverterNew(&source, &destination, &mut converter) };
         if status != 0 {
             return Err(error("the audio converter could not be made", status));
+        }
+        // only AAC has setup data here: the AC-3 and E-AC-3 frames carry what the converter needs
+        if let (Codec::Aac, Some(config)) = (codec, config) {
+            let cookie = esds_box(config);
+            // SAFETY: the converter is alive, and the cookie is read for the length given.
+            let status = unsafe { AudioConverterSetProperty(converter, MAGIC_COOKIE, cookie.len() as u32, cookie.as_ptr() as *const c_void) };
+            if status != 0 {
+                unsafe { AudioConverterDispose(converter) };
+                return Err(error("the decoder setup could not be given", status));
+            }
         }
         // no magic cookie: AudioToolbox refused the AAC setup data, and decodes these frames without it (the
         // AAC-LC with SBR tracks of the library were checked against ffmpeg that way)
@@ -186,14 +218,40 @@ mod imp {
 }
 
 /// Decode compressed audio packets to 16 kHz mono samples (see `Codec`).
-pub fn decode(codec: Codec, sample_rate: f64, channels: u32, packets: &[Vec<u8>]) -> io::Result<Vec<f32>> {
+pub fn decode(codec: Codec, sample_rate: f64, channels: u32, packets: &[Vec<u8>], config: Option<&[u8]>) -> io::Result<Vec<f32>> {
     #[cfg(target_os = "macos")]
     {
-        imp::decode(codec, sample_rate, channels, packets)
+        imp::decode(codec, sample_rate, channels, packets, config)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (codec, sample_rate, channels, packets);
+        let _ = (codec, sample_rate, channels, packets, config);
         Err(io::Error::new(io::ErrorKind::Unsupported, "decoding clips without ffmpeg is only available on macOS"))
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::imp::esds_box;
+
+    /// The `esds` box that carries the AudioSpecificConfig to the converter has the lengths its descriptors give:
+    /// ES_Descriptor (0x03) at 12 with its ES_ID and flags, DecoderConfigDescriptor (0x04) at 17 with 13 bytes of
+    /// fields, and DecoderSpecificInfo (0x05) with the config at 32.
+    #[test]
+    fn the_esds_box_has_the_setup_data_inside_its_descriptors() {
+        let asc = [0x13, 0x08, 0x56, 0xE5];
+        let boxed = esds_box(&asc);
+        assert_eq!(&boxed[4..8], b"esds");
+        assert_eq!(u32::from_be_bytes([boxed[0], boxed[1], boxed[2], boxed[3]]) as usize, boxed.len());
+        assert_eq!(boxed[12], 0x03);
+        let es_len = boxed[13] as usize;
+        assert_eq!(12 + 2 + es_len, boxed.len());
+        assert_eq!(boxed[17], 0x04);
+        let dcd_len = boxed[18] as usize;
+        let dsi_at = 19 + 13;
+        assert_eq!(boxed[dsi_at], 0x05);
+        assert_eq!(boxed[dsi_at + 1] as usize, asc.len());
+        assert_eq!(&boxed[dsi_at + 2..dsi_at + 2 + asc.len()], &asc);
+        assert_eq!(19 + dcd_len, dsi_at + 2 + asc.len());
     }
 }

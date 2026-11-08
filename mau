@@ -4,7 +4,10 @@
 # Before running, the build is brought up to date with cargo (a no-op when it already is).
 # With --gui the app (the program rust/target/<profile>/mau) is brought up to date too.
 # With --gui --sandboxed the sandboxed app that build.sh --sandboxed made is opened instead
-# (rust/target-nomkv/release/bundle/macos/mau.app); it is not rebuilt here.
+# (rust/target-nomkv/release/bundle/macos/mau.app). With --gui --sandboxed --nolgpl it is the app that
+# build.sh --sandboxed --nolgpl made (rust/target-nolgpl/release/bundle/macos/mau.app). If that app is missing or out
+# of date (another version, or a source file newer than it), it is built again first with build.sh --nonotarize,
+# which takes minutes.
 # MAU_NO_BUILD=1 (or FML_NO_BUILD=1, its name before the rename) skips the check and runs whatever is built.
 # Build by hand with: (cd rust && cargo build --release && cargo build -p mau-gui --release)
 here=$(cd "$(dirname "$0")" && pwd)
@@ -53,12 +56,18 @@ ensure() {
 
 want_app=0
 sandboxed=0
+nolgpl=0
 for arg in "$@"; do
   case "$arg" in
     --gui) want_app=1 ;;
     --sandboxed) sandboxed=1 ;;
+    --nolgpl) nolgpl=1 ;;
   esac
 done
+if [ "$nolgpl" = 1 ] && [ "$sandboxed" != 1 ]; then
+  echo "mau: --nolgpl opens the sandboxed app without ffmpeg, so it goes with --gui --sandboxed" >&2
+  exit 1
+fi
 # --sandboxed (with --gui) opens the sandboxed app that build.sh --sandboxed makes, not the one built here. The
 # two options are taken out of the arguments, so the app gets only what --gui allows (--enable search).
 if [ "$sandboxed" = 1 ]; then
@@ -72,7 +81,7 @@ if [ "$sandboxed" = 1 ]; then
     shift
     i=$((i - 1))
     case "$arg" in
-      --gui|--sandboxed) ;;
+      --gui|--sandboxed|--nolgpl) ;;
       *) set -- "$@" "$arg" ;;
     esac
   done
@@ -87,12 +96,47 @@ if [ -z "${MAU_NO_BUILD:-$FML_NO_BUILD}" ]; then
   fi
 fi
 
+# A sandboxed app is out of date when its version is not this checkout's (VERSION in lib.rs), or when a source of
+# the app is newer than its binary: the Rust files, the manifests and the page in mau-gui/ui. Its target folders
+# are left out, since builds write into them.
+sandbox_stale() {
+  app=$1
+  version=$(sed -n 's/^pub const VERSION: &str = "\(.*\)";/\1/p' "$rust/mau-core/src/lib.rs")
+  built=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null)
+  if [ "$built" != "$version" ]; then
+    echo "mau: the sandboxed app is version $built, this checkout is $version" >&2
+    return 0
+  fi
+  newer=$(find "$rust" \( -path "$rust/target*" -o -path "$rust/mau-gui/gen" \) -prune -o -type f \
+    \( -name '*.rs' -o -name '*.toml' -o -name '*.json' -o -name '*.html' -o -name '*.js' -o -name '*.css' \
+    -o -name '*.png' -o -name '*.icns' -o -name '*.ico' \) -newer "$app/Contents/MacOS/mau" -print -quit)
+  if [ -n "$newer" ]; then
+    echo "mau: the sandboxed app is older than $newer" >&2
+    return 0
+  fi
+  return 1
+}
+
 if [ "$sandboxed" = 1 ]; then
   # build.sh --sandboxed leaves the app here (its tools are in its Resources)
   app="$rust/target-nomkv/release/bundle/macos/mau.app"
-  if [ ! -d "$app" ]; then
-    echo "mau: there is no sandboxed app yet: build it with ./build.sh --target mac --sandboxed --nonotarize" >&2
-    exit 1
+  build="--sandboxed"
+  if [ "$nolgpl" = 1 ]; then
+    app="$rust/target-nolgpl/release/bundle/macos/mau.app"
+    build="--sandboxed --nolgpl"
+  fi
+  if [ ! -d "$app" ] || { [ -z "${MAU_NO_BUILD:-$FML_NO_BUILD}" ] && sandbox_stale "$app"; }; then
+    if [ -n "${MAU_NO_BUILD:-$FML_NO_BUILD}" ] || ! command -v cargo >/dev/null 2>&1; then
+      echo "mau: there is no up-to-date sandboxed app: build it with ./build.sh --target mac $build --nonotarize" >&2
+      [ -d "$app" ] || exit 1
+    else
+      echo "mau: building the sandboxed app (./build.sh --target mac $build --nonotarize), this takes a few minutes" >&2
+      # shellcheck disable=SC2086 # $build is two words at most
+      (cd "$here" && ./build.sh --target mac $build --nonotarize) || {
+        echo "mau: the build of the sandboxed app failed (see above)" >&2
+        exit 1
+      }
+    fi
   fi
   exec open "$app" ${1:+--args "$@"}
 fi

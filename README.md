@@ -6,7 +6,7 @@
 **Media Audio Utility**: change the default audio and subtitle tracks of your
 media files, and tidy their tracks, from the command line or a desktop app.
 
-Version 1.6.8
+Version 1.6.9
 
 ![The mau desktop app](docs/images/app-main.png)
 
@@ -130,12 +130,14 @@ touched, and ffmpeg is never started. The changes it refuses are:
 - adding a subtitle to an MP4 whose cues overlap (`mov_text` cannot hold them);
 - adding a WebVTT file with a NOTE, STYLE or REGION block after its first cue to an
   MKV;
-- `--detect` on an MP4 or an AVI, which cuts the sound with ffmpeg.
+- `--detect` on an MP4 or an AVI, which cuts the sound with ffmpeg, and `--detect`
+  on an MKV whose audio is another codec (such as DTS).
 
 Everything else works without it: the MKV, MP4 and AVI edits; MKV subtitles
 (adding SubRip, ASS, SSA and WebVTT, and extracting SubRip, ASS, PGS, VobSub and
 WebVTT); MP4 subtitles (adding SubRip, ASS, SSA and WebVTT, and extracting
-`mov_text`, WebVTT and TTML); and `--detect` on an MKV on macOS.
+`mov_text`, WebVTT and TTML); and `--detect` on an MKV on macOS, for AAC (AAC-LC,
+HE-AAC and HE-AAC v2), AC-3 and E-AC-3 (any other codec is refused).
 Its installers and archive are named with `-nolgpl`, and it is built in
 `rust/target-nolgpl`. The test suite runs it with `MAU_BIN` set to that binary
 and `MAU_SPIKE_NO_FFMPEG=1` (or the build from `--check`, which does not list

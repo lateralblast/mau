@@ -156,6 +156,11 @@ check them by hand before relying on them.
 - In a build with `native-detect` on macOS, the clips of an MKV for `--detect` are decoded with Apple's
   AudioToolbox, not ffmpeg: the sound is close to ffmpeg's (correlation 0.95 to 0.99 on the files checked), and
   the languages found were the same. The clip length of a file with no `Duration` in its header is one clip.
+  The codecs are AAC (AAC-LC, HE-AAC and HE-AAC v2), AC-3 and E-AC-3; any other codec is refused. For AAC the
+  AudioSpecificConfig from the track's CodecPrivate goes to the converter in an `esds` box (`audio_decode::imp`):
+  without it AudioToolbox refuses HE-AAC frames (`'bads'`). Checked against ffmpeg on an afconvert HE-AAC v2 file
+  (correlation 0.988), an HE-AAC v1 file (1.000) and an AAC-LC file (1.000); the HE-AAC v2 case is a repo test
+  (`an_he_aac_v2_clip_is_the_same_sound_as_ffmpeg_makes`, macOS only).
 - In the build with `--features no-ffmpeg` (`build.sh --sandboxed --nolgpl`), ffmpeg and ffprobe are never started:
   `model::ffmpeg_hidden` (or `MAU_SPIKE_NO_FFMPEG`) leaves them out of `required_tools`, and `util::run_command` refuses
   them with `io::ErrorKind::Unsupported`, which `apply` reports as the message and does not wrap in "failed". The detect

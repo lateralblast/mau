@@ -18,15 +18,8 @@ pub fn write_clip(source: &Path, track_number: u64, start_seconds: f64, seconds:
     let entry = ebml::read_track_entry(source, track_number)?
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no such track"))?;
     let codec = match entry.codec_id.as_str() {
-        "A_AAC" => {
-            // the AudioSpecificConfig starts with the object type (5 bits): 29 is HE-AAC v2 (parametric stereo),
-            // which is not checked here, so it is not decoded (the library has none)
-            let object_type = entry.codec_private.as_ref().and_then(|c| c.first()).map(|b| b >> 3);
-            if object_type == Some(29) {
-                return Err(io::Error::new(io::ErrorKind::Unsupported, "HE-AAC v2 (parametric stereo) has no decoder without ffmpeg yet"));
-            }
-            Codec::Aac
-        }
+        // AAC-LC, HE-AAC (SBR) and HE-AAC v2 (parametric stereo): the setup data says which, and goes to the converter
+        "A_AAC" => Codec::Aac,
         "A_AC3" => Codec::Ac3,
         "A_EAC3" => Codec::Eac3,
         other => {
@@ -42,7 +35,7 @@ pub fn write_clip(source: &Path, track_number: u64, start_seconds: f64, seconds:
     let first = blocks.first().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no sound in the clip"))?;
     let decoded_from = first.start_ms;
     let packets: Vec<Vec<u8>> = blocks.into_iter().map(|block| block.payload).collect();
-    let samples = audio_decode::decode(codec, entry.sample_rate, entry.channels as u32, &packets)?;
+    let samples = audio_decode::decode(codec, entry.sample_rate, entry.channels as u32, &packets, entry.codec_private.as_deref())?;
     // the decoded samples begin with the first frame read: keep those from the clip's start, for its length
     let skip = (((from_ms - decoded_from) as f64 / 1000.0) * RATE).max(0.0) as usize;
     let take = (seconds * RATE) as usize;
@@ -89,9 +82,45 @@ mod tests {
         out.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32767.0).collect()
     }
 
-    /// Each real file named in MAU_CLIP_CHECK (separated by `:`): the first audio track's clip at 60 seconds,
-    /// made here and by ffmpeg, must have the same length (within a tenth of a second) and be the same sound
-    /// (correlation above 0.9 at the best lag of up to 0.1 seconds).
+    /// The native clip of a file's first audio track at 60 seconds, against ffmpeg's: the same length (within a tenth
+    /// of a second) and the same sound (correlation above 0.9 at the best lag of up to 0.1 seconds). `Err` is the
+    /// reason it differs.
+    fn same_sound_as_ffmpeg(source: &Path, dir: &Path) -> Result<String, String> {
+        let tracks = ebml::read_file_tracks(source).map_err(|e| e.to_string())?;
+        let audio = tracks.iter().find(|t| t.kind == crate::track::Kind::Audio).ok_or("no audio track")?;
+        let out = dir.join("native.wav");
+        write_clip(source, audio.id as u64 + 1, 60.0, 10.0, &out).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
+        let native: Vec<f32> = bytes[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32767.0).collect();
+        let reference = ffmpeg_clip(source, 0, 60.0, 10.0);
+        let length_ok = (native.len() as f64 - reference.len() as f64).abs() < 1600.0;
+        let lag_range = 1600i64;
+        let mut best = f64::MIN;
+        for lag in -lag_range..=lag_range {
+            let (a, b): (Vec<f32>, Vec<f32>) = if lag >= 0 {
+                let n = native.len().min(reference.len().saturating_sub(lag as usize));
+                (native[..n].to_vec(), reference[lag as usize..lag as usize + n].to_vec())
+            } else {
+                let n = reference.len().min(native.len().saturating_sub((-lag) as usize));
+                (native[(-lag) as usize..(-lag) as usize + n].to_vec(), reference[..n].to_vec())
+            };
+            if a.len() < 16_000 { continue; }
+            let dot: f64 = a.iter().zip(&b).map(|(x, y)| (*x as f64) * (*y as f64)).sum();
+            let na: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+            let nb: f64 = b.iter().map(|y| (*y as f64).powi(2)).sum::<f64>().sqrt();
+            if na > 0.0 && nb > 0.0 {
+                best = best.max(dot / (na * nb));
+            }
+        }
+        let report = format!("native {} samples, ffmpeg {} samples, best correlation {best:.3}", native.len(), reference.len());
+        if !length_ok || best < 0.9 {
+            return Err(format!("length {} vs {}, correlation {best:.3}", native.len(), reference.len()));
+        }
+        Ok(report)
+    }
+
+    /// Each real file named in MAU_CLIP_CHECK (separated by `:`) must be the same sound as ffmpeg's clip (see
+    /// `same_sound_as_ffmpeg`).
     #[test]
     fn the_native_clip_is_the_same_sound_as_ffmpeg_makes_on_the_files_named_in_mau_clip_check() {
         let Ok(list) = std::env::var("MAU_CLIP_CHECK") else { return };
@@ -99,43 +128,38 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut failures = Vec::new();
         for file in list.split(':').filter(|f| !f.is_empty()) {
-            let source = Path::new(file);
-            let tracks = ebml::read_file_tracks(source).unwrap();
-            let audio = tracks.iter().find(|t| t.kind == crate::track::Kind::Audio).unwrap();
-            let out = dir.join("native.wav");
-            if let Err(error) = write_clip(source, audio.id as u64 + 1, 60.0, 10.0, &out) {
-                failures.push(format!("{file}: {error}"));
-                continue;
-            }
-            let bytes = std::fs::read(&out).unwrap();
-            let native: Vec<f32> = bytes[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32767.0).collect();
-            let reference = ffmpeg_clip(source, 0, 60.0, 10.0);
-            let length_ok = (native.len() as f64 - reference.len() as f64).abs() < 1600.0;
-            let lag_range = 1600i64;
-            let mut best = f64::MIN;
-            for lag in -lag_range..=lag_range {
-                let (a, b): (Vec<f32>, Vec<f32>) = if lag >= 0 {
-                    let n = native.len().min(reference.len().saturating_sub(lag as usize));
-                    (native[..n].to_vec(), reference[lag as usize..lag as usize + n].to_vec())
-                } else {
-                    let n = reference.len().min(native.len().saturating_sub((-lag) as usize));
-                    (native[(-lag) as usize..(-lag) as usize + n].to_vec(), reference[..n].to_vec())
-                };
-                if a.len() < 16_000 { continue; }
-                let dot: f64 = a.iter().zip(&b).map(|(x, y)| (*x as f64) * (*y as f64)).sum();
-                let na: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-                let nb: f64 = b.iter().map(|y| (*y as f64).powi(2)).sum::<f64>().sqrt();
-                if na > 0.0 && nb > 0.0 {
-                    best = best.max(dot / (na * nb));
-                }
-            }
-            eprintln!("{file}: native {} samples, ffmpeg {} samples, best correlation {best:.3}", native.len(), reference.len());
-            if !length_ok || best < 0.9 {
-                failures.push(format!("{file}: length {} vs {}, correlation {best:.3}", native.len(), reference.len()));
+            match same_sound_as_ffmpeg(Path::new(file), &dir) {
+                Ok(report) => eprintln!("{file}: {report}"),
+                Err(reason) => failures.push(format!("{file}: {reason}")),
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// HE-AAC v2 (parametric stereo, from afconvert) and HE-AAC v1 (SBR) in an MKV, made here, decode to the same
+    /// sound as ffmpeg's. Without the AAC setup data the converter refuses these frames. macOS only: afconvert is
+    /// Apple's, and the test is skipped where afconvert or ffmpeg is missing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_he_aac_v2_clip_is_the_same_sound_as_ffmpeg_makes() {
+        let dir = std::env::temp_dir().join(format!("mau-clip-he-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let runs = |program: &str, args: &[&str]| std::process::Command::new(program).args(args).status().map(|s| s.success()).unwrap_or(false);
+        let wav = dir.join("source.wav");
+        let m4a = dir.join("he.m4a");
+        let mkv = dir.join("he.mkv");
+        let made = runs("ffmpeg", &["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=90", "-f", "lavfi", "-i", "sine=frequency=550:duration=90", "-filter_complex", "[0][1]amerge=inputs=2,volume=0.5", "-ar", "48000", "-ac", "2", wav.to_str().unwrap()])
+            && runs("afconvert", &["-f", "m4af", "-d", "aacp", "-b", "48000", wav.to_str().unwrap(), m4a.to_str().unwrap()])
+            && runs("ffmpeg", &["-v", "error", "-y", "-i", m4a.to_str().unwrap(), "-map", "0:a", "-c", "copy", mkv.to_str().unwrap()]);
+        if made {
+            let result = same_sound_as_ffmpeg(&mkv, &dir);
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(result.is_ok(), "{}", result.unwrap_err());
+        } else {
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("skipped: needs afconvert (macOS) and ffmpeg to make the HE-AAC file");
+        }
     }
 
     #[test]

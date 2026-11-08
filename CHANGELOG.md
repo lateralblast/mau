@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.9] - 2026-11-09
+
+### Fixed
+- `--detect` on an MKV on macOS (the build without ffmpeg, and any build with `native-detect`) decodes HE-AAC and HE-AAC v2 tracks instead of refusing them. The AAC setup data from the track is given to Apple's converter, which refuses HE-AAC frames without it. Checked against ffmpeg's clip on an HE-AAC v2 file (correlation 0.988), an HE-AAC v1 file (1.000) and an AAC-LC file (1.000). Other codecs are still refused without ffmpeg.
+
 ## [1.6.8] - 2026-11-08
 
 ### Added
