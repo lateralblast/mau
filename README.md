@@ -6,7 +6,7 @@
 **Media Audio Utility**: change the default audio and subtitle tracks of your
 media files, and tidy their tracks, from the command line or a desktop app.
 
-Version 1.6.7
+Version 1.6.8
 
 ![The mau desktop app](docs/images/app-main.png)
 
@@ -119,6 +119,27 @@ The test suite runs it with `MAU_BIN` set to that binary; it recognises the
 build from `--check`, which does not list `mkvmerge` in that build
 (`MAU_SPIKE_NO_MKVTOOLNIX=1` also works, for a binary that hides the tools at
 run time).
+
+The build without ffmpeg either (`./build.sh --target <t> --sandboxed --nolgpl`,
+which compiles the `no-ffmpeg` feature as well as `no-mkvtoolnix`, and is the one
+with no LGPL or GPL code in it) carries neither mkvtoolnix nor ffmpeg nor
+ffprobe, and `--check` does not ask for them. A change that needs ffmpeg is
+refused with `ffmpeg is not included in this build (--nolgpl)` before the file is
+touched, and ffmpeg is never started. The changes it refuses are:
+
+- adding a subtitle to an MP4 whose cues overlap (`mov_text` cannot hold them);
+- adding a WebVTT file with a NOTE, STYLE or REGION block after its first cue to an
+  MKV;
+- `--detect` on an MP4 or an AVI, which cuts the sound with ffmpeg.
+
+Everything else works without it: the MKV, MP4 and AVI edits; MKV subtitles
+(adding SubRip, ASS, SSA and WebVTT, and extracting SubRip, ASS, PGS, VobSub and
+WebVTT); MP4 subtitles (adding SubRip, ASS, SSA and WebVTT, and extracting
+`mov_text`, WebVTT and TTML); and `--detect` on an MKV on macOS.
+Its installers and archive are named with `-nolgpl`, and it is built in
+`rust/target-nolgpl`. The test suite runs it with `MAU_BIN` set to that binary
+and `MAU_SPIKE_NO_FFMPEG=1` (or the build from `--check`, which does not list
+`ffmpeg`): the tests that need ffmpeg to succeed are skipped there.
 
 Optional, for `--detect` (see
 [Guessing the language of a track](#guessing-the-language-of-a-track)):
@@ -1210,7 +1231,10 @@ The command-line tools that the sandboxed Mac app bundles keep their own
 licences. The sandboxed app is the LGPL build: its ffmpeg and ffprobe are built
 from source as LGPL-2.1-or-later with no GPL codecs, its mediainfo is BSD, and
 whisper-cli is MIT. It carries no mkvtoolnix, so the MKV work is done with
-ffmpeg. The GPL build, which also carries mkvtoolnix (GPL-2.0-or-later) and
+ffmpeg. `--sandboxed --nolgpl` makes the app with no ffmpeg or ffprobe at all
+(see the build without mkvtoolnix, above): what it
+carries is mediainfo (BSD), whisper-cli (MIT) and their libraries, and it has no
+LGPL or GPL code. The GPL build, which also carries mkvtoolnix (GPL-2.0-or-later) and
 Homebrew's ffmpeg (GPL-3.0-or-later), is made with `--with-mkvtoolnix`, and its
 tools' GPL licences apply to that app. Every other bundled package keeps its
 licence too, and the app carries it: `Contents/Resources/licences/` has a folder

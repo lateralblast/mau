@@ -21,12 +21,21 @@ pub fn mkvtoolnix_hidden() -> bool {
     cfg!(feature = "no-mkvtoolnix") || std::env::var_os("MAU_SPIKE_NO_MKVTOOLNIX").is_some()
 }
 
-/// The commands every action needs in this build: mkvtoolnix's only when this build uses it.
+/// Whether this build has no ffmpeg at all: the `no-ffmpeg` feature (the build with no LGPL or GPL code, made by
+/// `build.sh --sandboxed --nolgpl`), or, for the tests, the environment variable MAU_SPIKE_NO_FFMPEG. ffmpeg and
+/// ffprobe are then never started, and a change that needs them is refused.
+pub fn ffmpeg_hidden() -> bool {
+    cfg!(feature = "no-ffmpeg") || std::env::var_os("MAU_SPIKE_NO_FFMPEG").is_some()
+}
+
+/// The commands every action needs in this build: mkvtoolnix's only when this build uses it, and ffmpeg's only when
+/// this build has ffmpeg.
 pub fn required_tools() -> Vec<(&'static str, &'static str)> {
     REQUIRED_TOOLS
         .iter()
         .copied()
         .filter(|(tool, _)| !(mkvtoolnix_hidden() && tool.starts_with("mkv")))
+        .filter(|(tool, _)| !(ffmpeg_hidden() && *tool == "ffmpeg"))
         .collect()
 }
 

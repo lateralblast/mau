@@ -29,6 +29,8 @@ objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString
 [features]
 # the build without mkvtoolnix (see mau-core)
 no-mkvtoolnix = ["mau-core/no-mkvtoolnix"]
+# the build without ffmpeg or ffprobe (see mau-core)
+no-ffmpeg = ["mau-core/no-ffmpeg"]
 native-mkv = ["mau-core/native-mkv"]
 native-mp4 = ["mau-core/native-mp4"]
 native-avi = ["mau-core/native-avi"]

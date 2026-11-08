@@ -90,6 +90,10 @@ pub fn run_command(cmd: &[String]) -> io::Result<Ran> {
     if crate::model::mkvtoolnix_hidden() && cmd[0].starts_with("mkv") {
         return Err(io::Error::new(io::ErrorKind::NotFound, "spike: mkvtoolnix hidden"));
     }
+    if crate::model::ffmpeg_hidden() && (cmd[0] == "ffmpeg" || cmd[0] == "ffprobe") {
+        let message = format!("{} is not included in this build (--nolgpl), and this change needs it", cmd[0]);
+        return Err(io::Error::new(io::ErrorKind::Unsupported, message));
+    }
     let mut child = Command::new(resolve_program(&cmd[0]))
         .args(&cmd[1..])
         .stdin(Stdio::null())

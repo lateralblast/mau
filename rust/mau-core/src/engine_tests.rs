@@ -510,11 +510,16 @@ fn install_uses_the_package_manager_of_the_system_once_per_package() {
     let missing: Vec<String> = ["mkvmerge", "mkvpropedit", "mediainfo", "ffmpeg"].map(String::from).to_vec();
     mau.installer = Some(Installer::Dnf);
     mau.install_missing(&missing);
-    assert_eq!(*heard.lock().unwrap(), [
-        "Executing:\tsudo dnf install -y mkvtoolnix",
-        "Executing:\tsudo dnf install -y mediainfo",
-        "Executing:\tsudo dnf install -y ffmpeg-free",
-    ]); // mkvmerge and mkvpropedit are one package
+    // mkvmerge and mkvpropedit are one package; the tools a build does not need are not installed
+    let mut expected = Vec::new();
+    if !mkvtoolnix_hidden() {
+        expected.push("Executing:\tsudo dnf install -y mkvtoolnix");
+    }
+    expected.push("Executing:\tsudo dnf install -y mediainfo");
+    if !ffmpeg_hidden() {
+        expected.push("Executing:\tsudo dnf install -y ffmpeg-free");
+    }
+    assert_eq!(*heard.lock().unwrap(), expected);
     heard.lock().unwrap().clear();
     mau.installer = Some(Installer::Winget);
     mau.install_missing(&missing[2..3].to_vec());
@@ -522,7 +527,11 @@ fn install_uses_the_package_manager_of_the_system_once_per_package() {
     heard.lock().unwrap().clear();
     mau.installer = None;
     mau.install_missing(&missing[..1].to_vec());
-    assert!(heard.lock().unwrap()[0].starts_with("don't know how to install \"mkvtoolnix\" on this OS"));
+    if mkvtoolnix_hidden() {
+        assert!(heard.lock().unwrap().is_empty(), "mkvmerge is not needed in this build");
+    } else {
+        assert!(heard.lock().unwrap()[0].starts_with("don't know how to install \"mkvtoolnix\" on this OS"));
+    }
 }
 
 // The free-space check, and the commands that are missing: a disk that is full and a PATH without
@@ -661,14 +670,24 @@ fn check_says_which_commands_are_missing() {
     set_finder(&mut mau, &["mkvmerge", "ffmpeg"]);
     let result = mau.check_tools().unwrap();
     assert_eq!(result.status, Status::Error);
-    assert_eq!(result.message, "missing: mkvpropedit, mediainfo (use --install to install them)");
+    // the tools that are found are mkvmerge and ffmpeg; the others that this build needs are missing
+    let found = ["mkvmerge", "ffmpeg"];
+    let required = required_tools();
+    let missing: Vec<&str> = required.iter().map(|(t, _)| *t).filter(|t| !found.contains(t)).collect();
+    assert_eq!(result.message, format!("missing: {} (use --install to install them)", missing.join(", ")));
     let listed: Vec<(String, bool)> = result.data.as_array().unwrap().iter()
         .map(|e| (e["tool"].as_str().unwrap().to_string(), e["path"].is_string())).collect();
     // the required ones, then the optional whisper-cli (missing, but not an error) and the model
-    assert_eq!(listed, [("mkvmerge".into(), true), ("mkvpropedit".into(), false), ("mediainfo".into(), false), ("ffmpeg".into(), true), ("whisper-cli".into(), false), ("MAU_WHISPER_MODEL".into(), false)]);
-    assert_eq!(result.data[1]["package"], "mkvtoolnix");
-    assert_eq!(result.data[4]["optional"], true);
-    assert_eq!(result.data[4]["package"], "whisper-cpp");
+    let mut expected: Vec<(String, bool)> = required.iter().map(|(t, _)| (t.to_string(), found.contains(t))).collect();
+    expected.push(("whisper-cli".into(), false));
+    expected.push(("MAU_WHISPER_MODEL".into(), false));
+    assert_eq!(listed, expected);
+    let at = required.len();
+    assert_eq!(result.data[at]["optional"], true);
+    assert_eq!(result.data[at]["package"], "whisper-cpp");
+    if let Some(index) = required.iter().position(|(t, _)| *t == "mkvpropedit") {
+        assert_eq!(result.data[index]["package"], "mkvtoolnix");
+    }
     // everything there: nothing to say
     set_finder(&mut mau, &["mkvmerge", "mkvpropedit", "mediainfo", "ffmpeg"]);
     assert_ne!(mau.check_tools().unwrap().status, Status::Error);
@@ -684,7 +703,13 @@ fn check_with_install_shows_what_it_would_run_and_is_not_an_error_in_a_dry_run()
     assert_ne!(result.status, Status::Error, "{}", result.message);
     // (the model is also mentioned: a dry run only says that it would be downloaded)
     let commands: Vec<String> = heard.lock().unwrap().iter().filter(|line| line.starts_with("Executing:")).cloned().collect();
-    assert_eq!(commands, ["Executing:\tsudo apt install -y mkvtoolnix", "Executing:\tsudo apt install -y mediainfo", "Executing:\tsudo apt install -y whisper.cpp"]);
+    let mut expected = Vec::new();
+    if !mkvtoolnix_hidden() {
+        expected.push("Executing:\tsudo apt install -y mkvtoolnix");
+    }
+    expected.push("Executing:\tsudo apt install -y mediainfo");
+    expected.push("Executing:\tsudo apt install -y whisper.cpp");
+    assert_eq!(commands, expected);
 }
 
 #[test]

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
-from conftest import MAU_BIN, Ran, leftovers, mkv_layout, requires_tools
+from conftest import MAU_BIN, Ran, leftovers, mkv_layout, needs_ffmpeg, requires_tools
 
 pytestmark = [pytest.mark.skipif(not MAU_BIN, reason="--detect is Rust only"), requires_tools]
 
@@ -94,6 +94,20 @@ def test_detect_reports_the_language_as_json(
     assert json.loads(ran.out)  # one document
 
 
+def test_detect_on_an_mp4_is_refused_when_ffmpeg_is_hidden(
+        run: Callable[..., Ran], film_mp4: Path, whisper: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without ffmpeg (the --nolgpl build, here MAU_SPIKE_NO_FFMPEG) an MP4's sound can't be cut:
+    the detection says why, and the file is left as it was."""
+    monkeypatch.setenv("MAU_SPIKE_NO_FFMPEG", "1")
+    before = film_mp4.read_bytes()
+    ran = run("--detect", "--track", "1", "-i", film_mp4)
+    assert ran.code == 1
+    assert "ffmpeg is not included in this build (--nolgpl)" in ran.err
+    assert film_mp4.read_bytes() == before
+
+
+@needs_ffmpeg
 def test_detect_on_an_mp4(run: Callable[..., Ran], film_mp4: Path, whisper: Path) -> None:
     ran = run("--detect", "--track", "1", "-i", film_mp4)
     assert ran.code == 0, ran.err
@@ -305,6 +319,7 @@ def test_update_with_nothing_to_change_changes_nothing(
     assert two.read_bytes() == before
 
 
+@needs_ffmpeg
 @pytest.mark.usefixtures("french")
 def test_update_is_not_done_for_avi(
     run: Callable[..., Ran], make: Callable[..., Path], whisper: Path

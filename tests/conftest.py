@@ -95,6 +95,26 @@ def _built_without_mkvtoolnix() -> bool:
 # The build without mkvtoolnix (the App Store and LGPL build) does the MKV work with ffmpeg. Tests
 # that need mkvtoolnix are skipped there; the others expect ffmpeg where mkvtoolnix would work.
 NO_MKVTOOLNIX = _built_without_mkvtoolnix()
+
+
+def _built_without_ffmpeg() -> bool:
+    """Whether the binary under test has no ffmpeg at all (``--features no-ffmpeg``, ``--nolgpl``).
+
+    That build does not mention ffmpeg in ``--check``, while every other build lists it, installed
+    or not. MAU_SPIKE_NO_FFMPEG also says so, for a binary that hides ffmpeg at run time instead.
+    """
+    if os.environ.get("MAU_SPIKE_NO_FFMPEG"):
+        return True
+    if not MAU_BIN:
+        return False
+    check = subprocess.run([MAU_BIN, "--check"], capture_output=True, text=True).stdout
+    return "ffmpeg" not in check
+
+
+# The build without ffmpeg (--nolgpl) refuses a change that needs ffmpeg, before touching the file.
+# Tests that need ffmpeg to succeed are skipped there.
+NO_FFMPEG = _built_without_ffmpeg()
+needs_ffmpeg = pytest.mark.skipif(NO_FFMPEG, reason="needs ffmpeg (not in the --nolgpl build)")
 # the build that writes MKV flags, names and languages itself (native-mkv): MAU_NATIVE_MKV=1
 NATIVE_MKV = bool(os.environ.get("MAU_NATIVE_MKV"))
 # the Rust build does MP4 languages, flags and order in place

@@ -367,6 +367,33 @@ def test_cues_that_overlap_are_added_by_ffmpeg_not_this_program(
     assert "native-mp4 add-text-tracks" not in ran.err and "ffmpeg" in ran.err
 
 
+@pytest.mark.skipif(not MAU_BIN, reason="the refusal is in the Rust build")
+def test_overlapping_cues_are_refused_without_ffmpeg_and_ffmpeg_is_never_started(
+        run: Callable[..., Ran], film_mp4: Path, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without ffmpeg (--nolgpl) an MP4 that needs ffmpeg for its overlapping cues is refused
+    before the file is replaced. A stand-in ffmpeg on PATH records if it is started, and it must not
+    be."""
+    stand_in = tmp_path / "stand-in"
+    stand_in.mkdir()
+    marker = tmp_path / "ffmpeg-was-started"
+    program = stand_in / "ffmpeg"
+    program.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 0\n')
+    program.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("MAU_SPIKE_NO_FFMPEG", "1")
+    subs = tmp_path / "overlap.srt"
+    subs.write_text("1\n00:00:00,000 --> 00:00:02,000\nA\n\n2\n00:00:01,000 --> 00:00:03,000\nB\n",
+                    encoding="utf-8")
+    before = film_mp4.read_bytes()
+    ran = run("--add", "subtitle", "--sub-file", subs, "--lang", "spa", "-i", film_mp4)
+    assert ran.code == 1
+    assert "ffmpeg is not included in this build (--nolgpl), and this change needs it" in ran.err
+    assert not marker.exists()
+    assert film_mp4.read_bytes() == before
+    assert not [p for p in tmp_path.iterdir() if ".fml-" in p.name], "no temporary file is left"
+
+
 @pytest.mark.skipif(not MAU_BIN, reason="--set track is Rust only")
 def test_set_track_in_an_mp4_changes_language_and_name_but_not_the_forced_flag(
         run: Callable[..., Ran], film_mp4: Path) -> None:

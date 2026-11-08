@@ -19,6 +19,11 @@
 #                                                                 The app's Resources/licences has the licence of each package the
 #                                                                 tools come from, and NOTICE.txt (packaging/mac/collect_notices.py).
 #                                                                 --lgpl is the same as --sandboxed (kept for existing scripts).
+#                                                                 --sandboxed --nolgpl is the build with no LGPL or GPL code: no
+#                                                                 mkvtoolnix, and no ffmpeg or ffprobe either (the native-* features
+#                                                                 and the no-ffmpeg feature, built in rust/target-nolgpl). A change that
+#                                                                 needs ffmpeg is refused with a message, before the file is touched.
+#                                                                 It names its .dmg with -sandboxed-nolgpl.
 #                                                                 The sandboxed builds are local, for --target mac.
 #   ./build.sh --target linux [--package deb|rpm|appimage|all]               (comma list allowed, e.g. deb,rpm; default: the
 #                                                                 distribution's own package: deb on Debian/Ubuntu, rpm on
@@ -58,14 +63,14 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --target mac|linux|deb|rpm|windows [--arch arm64|x64|universal] [--notarize|--nonotarize] [--package deb|rpm|appimage|all] [--no-cli] [--sandboxed [--with-mkvtoolnix]] [--lgpl] [--local|--ci] [--dry-run]"
+  echo "usage: $0 --target mac|linux|deb|rpm|windows [--arch arm64|x64|universal] [--notarize|--nonotarize] [--package deb|rpm|appimage|all] [--no-cli] [--sandboxed [--with-mkvtoolnix|--nolgpl]] [--lgpl] [--local|--ci] [--dry-run]"
   echo "       $0 [--target <t>] --release [<version>] [--commit <ref>] [--draft] [--yes] [--dry-run]"
   echo "       $0 --delete-release [<version>] [--keep-tag] [--yes] [--dry-run]"
   exit "${1:-1}"
 }
 
 target="" arch="" package="" cli=1 delete=0 del_version="" rel_version="" rel_commit="" keep_tag=0 release=0 draft=0 yes=0 dry=0 where=""
-notarize=1 notarize_set=0 notarizing=0 sandboxed=0 nomkv=0 lgpl=0 gpl=0
+notarize=1 notarize_set=0 notarizing=0 sandboxed=0 nomkv=0 lgpl=0 gpl=0 nolgpl=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) target="${2:-}"; shift 2 ;;
@@ -77,6 +82,7 @@ while [ $# -gt 0 ]; do
     --sandboxed) sandboxed=1; shift ;;
     --no-mkvtoolnix) nomkv=1; shift ;;
     --lgpl) lgpl=1; shift ;;
+    --nolgpl) nolgpl=1; shift ;;
     --with-mkvtoolnix) gpl=1; shift ;;
     --local) where=local; shift ;;
     --ci) where=ci; shift ;;
@@ -121,8 +127,20 @@ if [ "$gpl" = 1 ] && [ "$lgpl" = 1 ]; then
   echo "--with-mkvtoolnix and --lgpl are different sandboxed builds: give one" >&2; exit 1
 fi
 # the sandboxed app is the LGPL build (no mkvtoolnix, the LGPL ffmpeg) unless --with-mkvtoolnix asks for the GPL one
-if [ "$sandboxed" = 1 ] && [ "$gpl" != 1 ]; then lgpl=1; fi
+if [ "$nolgpl" = 1 ] && [ "$sandboxed" != 1 ]; then
+  echo "--nolgpl goes with --sandboxed" >&2; exit 1
+fi
+if [ "$nolgpl" = 1 ] && { [ "$gpl" = 1 ] || [ "$lgpl" = 1 ]; }; then
+  echo "--nolgpl is a sandboxed build with neither mkvtoolnix nor ffmpeg: it cannot be combined with --with-mkvtoolnix or --lgpl" >&2; exit 1
+fi
+if [ "$nolgpl" = 1 ] && { [ "$where" = ci ] || [ "$release" = 1 ] || [ "$delete" = 1 ]; }; then
+  echo "--nolgpl is for a local build of --target mac: it cannot be combined with --ci, --release or --delete-release" >&2; exit 1
+fi
+# the sandboxed app is the LGPL build (no mkvtoolnix, the LGPL ffmpeg) unless --with-mkvtoolnix asks for the GPL one,
+# or --nolgpl asks for the build with no ffmpeg at all
+if [ "$sandboxed" = 1 ] && [ "$gpl" != 1 ] && [ "$nolgpl" != 1 ]; then lgpl=1; fi
 if [ "$lgpl" = 1 ]; then sandboxed=1; nomkv=1; fi
+if [ "$nolgpl" = 1 ]; then nomkv=1; fi
 if [ "$nomkv" = 1 ] && [ "$where" = ci ]; then
   echo "--no-mkvtoolnix is not yet available on the GitHub runners: build it locally" >&2; exit 1
 fi
@@ -326,6 +344,8 @@ sandbox_stage() {
   for tool in mkvmerge mkvpropedit mkvextract mediainfo ffmpeg ffprobe; do
     # the build without mkvtoolnix does not use (or carry) its commands
     if [ "$nomkv" = 1 ] && [ "${tool#mkv}" != "$tool" ]; then continue; fi
+    # the --nolgpl build has no ffmpeg or ffprobe at all
+    if [ "$nolgpl" = 1 ] && { [ "$tool" = ffmpeg ] || [ "$tool" = ffprobe ]; }; then continue; fi
     if [ "$lgpl" = 1 ] && { [ "$tool" = ffmpeg ] || [ "$tool" = ffprobe ]; }; then
       path="$root/rust/target/lgpl-ffmpeg/bin/$tool"
     else
@@ -474,11 +494,18 @@ build_target() {
   tdir="$root/rust/target" feature_args=() suffix=""
   if [ "$nomkv" = 1 ]; then
     tdir="$root/rust/target-nomkv"
-    export CARGO_TARGET_DIR="$tdir"
     # the native features do the MKV, MP4 and AVI edits, the MKV subtitles and the clips for --detect in the app
     # (see APPSTORE.md); ffmpeg is still bundled for what they do not yet do
-    feature_args=(--features "no-mkvtoolnix native-mkv native-mp4 native-avi native-detect")
+    features="no-mkvtoolnix native-mkv native-mp4 native-avi native-detect"
     suffix="-no-mkvtoolnix"
+    if [ "$nolgpl" = 1 ]; then
+      # nothing is left to bundle from ffmpeg: the no-ffmpeg feature refuses what needs it
+      tdir="$root/rust/target-nolgpl"
+      features="$features no-ffmpeg"
+      suffix="-nolgpl"
+    fi
+    export CARGO_TARGET_DIR="$tdir"
+    feature_args=(--features "$features")
   fi
   if [ "$lgpl" = 1 ]; then suffix="-lgpl"; fi
   mkdir -p "$dist"

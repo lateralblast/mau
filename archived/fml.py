@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Name:         fml (Fix Media Language etc)
-# Version:      1.6.7
+# Version:      1.6.8
 # Release:      1
 # License:      Apache-2.0
 #               https://www.apache.org/licenses/LICENSE-2.0
@@ -41,7 +41,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
 
-__version__ = "1.6.7"
+__version__ = "1.6.8"
 
 # Commands the script runs and the package that provides each
 REQUIRED_TOOLS = {

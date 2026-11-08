@@ -685,6 +685,11 @@ impl Mau {
             return Ok(true);
         }
         match run_command(&cmd) {
+            // the tool is not in this build at all: say so, as the change was not attempted
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                result.error(strerror(&error));
+                Ok(false)
+            }
             Err(error) => {
                 result.error(format!("{} failed: {}", cmd[0], strerror(&error)));
                 Ok(false)
@@ -2181,6 +2186,10 @@ impl Mau {
                         return Ok(result);
                     }
                 } else {
+                    if crate::model::ffmpeg_hidden() {
+                        result.error(format!("could not read the sound of track {} of {}: ffmpeg is not included in this build (--nolgpl)", track.number, media.path));
+                        return Ok(result);
+                    }
                     let start_text = format!("{start:.3}");
                     let map = format!("0:a:{}", track.number - 1);
                     let cut = args(&[

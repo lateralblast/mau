@@ -16,6 +16,7 @@ from conftest import (
     MP4_HEADER,
     NATIVE_MKV,
     NATIVE_MP4,
+    NO_FFMPEG,
     NO_MKVTOOLNIX,
     Ran,
     Stubs,
@@ -32,9 +33,11 @@ SUBS2 = [("eng", False), ("ita", False)]
 
 
 def required_here() -> list[tuple[str, str]]:
-    """The commands every action needs in this build (mkvtoolnix's are not needed without it)."""
+    """The commands every action needs in this build (mkvtoolnix's are not needed without it, and
+    ffmpeg's are not needed without ffmpeg)."""
     return [(tool, package) for tool, package in dict(fml.REQUIRED_TOOLS).items()
-            if not (NO_MKVTOOLNIX and tool.startswith("mkv"))]
+            if not (NO_MKVTOOLNIX and tool.startswith("mkv"))
+            and not (NO_FFMPEG and tool == "ffmpeg")]
 
 
 def mi_track(kind: str, order: int, language: str, default: bool) -> dict[str, str]:
@@ -374,7 +377,8 @@ def test_install_dry_run_installs_each_package_once(run: Callable[..., Ran],
     # the Python tests pretend to be Ubuntu; the Rust binary installs the way the real system does
     install = "brew install" if MAU_BIN and sys.platform == "darwin" else "sudo apt install -y"
     packages = ["mkvtoolnix"] if not NO_MKVTOOLNIX else []
-    assert commands == [f"{install} {p}" for p in packages + ["mediainfo", "ffmpeg"]]
+    packages += ["mediainfo"] + ([] if NO_FFMPEG else ["ffmpeg"])
+    assert commands == [f"{install} {p}" for p in packages]
 
 
 def test_install_on_macos_uses_brew(run: Callable[..., Ran], no_tools: Path,
@@ -398,6 +402,7 @@ def test_an_action_names_the_commands_it_needs(run: Callable[..., Ran], fake_mkv
     if not NATIVE_MKV:
         mkv = run("--set", "lang", "--default", "English", "-i", fake_mkv)
         missing = "mkvmerge, mkvpropedit" if not NO_MKVTOOLNIX else "mediainfo, ffmpeg"
+        missing = missing.replace(", ffmpeg", "") if NO_FFMPEG else missing
         assert mkv.code == 1 and f"command not found: {missing}" in mkv.err
     mp4 = run("--get", "lang", "-i", fake_mp4)
     assert mp4.code == 1 and "command not found: mediainfo" in mp4.err

@@ -1840,7 +1840,7 @@ dependencies = [
 
 [[package]]
 name = "mau-cli"
-version = "1.6.7"
+version = "1.6.8"
 dependencies = [
  "clap",
  "libc",
@@ -1850,7 +1850,7 @@ dependencies = [
 
 [[package]]
 name = "mau-core"
-version = "1.6.7"
+version = "1.6.8"
 dependencies = [
  "chrono",
  "libc",
@@ -1863,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "mau-gui"
-version = "1.6.7"
+version = "1.6.8"
 dependencies = [
  "mau-core",
  "objc2",

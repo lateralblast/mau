@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
-from conftest import MAU_BIN, NO_MKVTOOLNIX, Ran, Stubs
+from conftest import MAU_BIN, NO_FFMPEG, NO_MKVTOOLNIX, Ran, Stubs
 
 import fml
 
@@ -150,11 +150,20 @@ def test_check_needs_no_file(run: Callable[..., Ran], stubs: Stubs) -> None:
     ran = run("--check")
     assert ran.code == 0
     # the required commands (whisper-cli and the model are optional, and are listed too): four,
-    # or two without mkvtoolnix
+    # two without mkvtoolnix, and one fewer without ffmpeg
     required = [line for line in ran.out.splitlines()
                 if line.startswith("Found:")
                 and "whisper" not in line and "MAU_WHISPER" not in line]
-    assert len(required) == (2 if NO_MKVTOOLNIX else 4)
+    assert len(required) == 4 - (2 if NO_MKVTOOLNIX else 0) - (1 if NO_FFMPEG else 0)
+
+
+@pytest.mark.skipif(not MAU_BIN, reason="--nolgpl is a build of the Rust binary")
+def test_check_does_not_list_ffmpeg_when_ffmpeg_is_hidden(
+        run: Callable[..., Ran], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The build without ffmpeg (--nolgpl) does not need it, so --check does not mention it."""
+    monkeypatch.setenv("MAU_SPIKE_NO_FFMPEG", "1")
+    ran = run("--check")
+    assert "ffmpeg" not in ran.out and "ffmpeg" not in ran.err
 
 
 def test_the_new_options_parse(run: Callable[..., Ran], tmp_path: Path) -> None:

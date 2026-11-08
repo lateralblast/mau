@@ -16,6 +16,7 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done.
 
 ## Done
 
+- [x] `build.sh --sandboxed --nolgpl`: the app with no ffmpeg or ffprobe (and no mkvtoolnix), so no LGPL or GPL code. A change that needs ffmpeg is refused before the file is touched (1.6.8).
 - [x] Look at the first CI run on GitHub: the Build workflow ran the Linux installer (2026-11-07). It was slow in its apt step, but finished without issue.
 - [x] `--info` codec names (2026-11-07): the Rust version keeps the ffprobe names it uses for every codec (`aac`, `mpeg4`, `subrip`), and `fml.py`, which is archived, keeps mkvmerge's. The difference is recorded in `rust/README.md` under Differences (1.6.5). The test accepts either name.
 - [x] Run the `.dmg` build from Finder on a Mac with `mkvtoolnix` and `mediainfo` installed (2026-11-07). The notarised universal `mau_1.6.2_universal.dmg` opened with no Gatekeeper warning, its app moved to Applications and ran, and the header showed `mkvtoolnix`, `ffmpeg`, `mediainfo` and `whisper-cli` as found. The real-file changes were run from the app too.

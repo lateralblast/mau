@@ -156,6 +156,12 @@ check them by hand before relying on them.
 - In a build with `native-detect` on macOS, the clips of an MKV for `--detect` are decoded with Apple's
   AudioToolbox, not ffmpeg: the sound is close to ffmpeg's (correlation 0.95 to 0.99 on the files checked), and
   the languages found were the same. The clip length of a file with no `Duration` in its header is one clip.
+- In the build with `--features no-ffmpeg` (`build.sh --sandboxed --nolgpl`), ffmpeg and ffprobe are never started:
+  `model::ffmpeg_hidden` (or `MAU_SPIKE_NO_FFMPEG`) leaves them out of `required_tools`, and `util::run_command` refuses
+  them with `io::ErrorKind::Unsupported`, which `apply` reports as the message and does not wrap in "failed". The detect
+  path names ffmpeg in its warning. Refused on purpose: overlapping MP4 subtitle cues, a WebVTT NOTE after the first cue
+  added to an MKV, and `--detect` on an MP4 or AVI. The refusals are tested with `MAU_SPIKE_NO_FFMPEG` in
+  `tests/test_mp4_avi.py`, `tests/test_detect.py` and `tests/test_cli.py`.
 - In the build without mkvtoolnix (`--features no-mkvtoolnix`), a global `TITLE` tag is written
   by ffmpeg as the file's Title element instead, so its value survives but is not a tag. ffmpeg's
   Matroska muxer cannot write a global tag. Attachments and chapters are kept. Accepted for now
