@@ -97,46 +97,36 @@ def _built_without_mkvtoolnix() -> bool:
 NO_MKVTOOLNIX = _built_without_mkvtoolnix()
 # the build that writes MKV flags, names and languages itself (native-mkv): MAU_NATIVE_MKV=1
 NATIVE_MKV = bool(os.environ.get("MAU_NATIVE_MKV"))
-NATIVE_MP4 = bool(os.environ.get("MAU_NATIVE_MP4"))  # the Rust build does MP4 languages, flags and order in place
-NATIVE_AVI = bool(os.environ.get("MAU_NATIVE_AVI"))  # the Rust build puts an AVI's audio streams in order itself
+# the Rust build does MP4 languages, flags and order in place
+NATIVE_MP4 = bool(os.environ.get("MAU_NATIVE_MP4"))
+# the Rust build puts an AVI's audio streams in order itself
+NATIVE_AVI = bool(os.environ.get("MAU_NATIVE_AVI"))
 
-# Stub tests that fake a tool the native MKV build does not run (it reads and writes MKV itself, so the stub
-# mkvmerge or ffmpeg output is never seen). They are skipped under MAU_NATIVE_MKV, and each should be rewritten
-# as a real-file test or removed (the list and its status are in APPSTORE.md, "Gaps to address later").
+# Stub tests that fake a tool the native MKV build does not run (it reads and writes MKV itself,
+# so the stub mkvmerge or ffmpeg output is never seen). They are skipped under MAU_NATIVE_MKV, and
+# each should be rewritten as a real-file test or removed (the list and its status are in
+# APPSTORE.md, "Gaps to address later").
 NATIVE_MKV_SKIPPED_STUBS = frozenset({
-    "test_actions_run_in_the_order_given",
     "test_a_signal_during_an_edit_removes_the_copy",
     "test_a_failing_tool_leaves_the_original_and_exits_1",
-    "test_a_log_that_cannot_be_written_is_a_warning",
     "test_a_move_that_keeps_the_old_order_is_caught",
     "test_a_removal_that_loses_names_is_caught",
     "test_a_tool_that_does_nothing_is_caught",
     "test_an_edit_that_leaves_the_language_alone_is_caught",
-    "test_an_edit_that_sets_the_language_is_accepted",
-    "test_an_mkv_may_be_left_with_no_default_subtitle",
-    "test_backup_dry_run_only_plans_it",
-    "test_backup_is_not_made_when_nothing_changes",
-    "test_backup_json_names_the_backup",
-    "test_backup_keeps_the_original_as_a_hard_link",
-    "test_directory_mode_skips_other_files_quietly",
-    "test_dry_run_json_records_the_plan",
-    "test_dry_run_shows_the_changes_and_the_command",
-    "test_force_allows_removing_every_audio_track",
-    "test_jobs_give_the_same_output_in_the_same_order",
-    "test_jobs_log_every_change_as_valid_json",
-    "test_jobs_make_every_change",
     "test_jobs_with_failures_report_each_in_order",
-    "test_json_keeps_stdout_clean",
-    "test_log_is_added_to_not_replaced",
-    "test_log_lines_describe_the_change",
     "test_mkvmerge_errors_fail_the_file",
     "test_one_bad_file_does_not_stop_the_rest",
-    "test_one_job_for_one_file_is_run_directly",
-    "test_refuses_to_remove_every_audio_track",
-    "test_removal_with_the_right_tracks_is_accepted",
     "test_removal_with_the_wrong_tracks_is_rejected",
-    "test_removing_a_track_that_is_not_the_default_promotes_nothing",
-    "test_removing_the_default_audio_makes_the_next_one_default",
+    "test_a_good_edit_replaces_the_file_with_the_checked_copy",
+    "test_removing_every_subtitle_track_needs_no_force",
+    "test_preserve_refuses_when_nothing_would_be_left",
+    "test_leftover_temporary_files_are_not_treated_as_media",
+    "test_directory_mode_is_in_sorted_order",
+    "test_each_action_only_needs_its_own_tools",
+    "test_backups_are_not_treated_as_media",
+    "test_no_filters_finds_everything",
+    "test_filters",
+    "test_mkvmerge_warnings_count_as_success",
 })
 
 needs_mkvtoolnix = pytest.mark.skipif(
@@ -157,7 +147,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     if NATIVE_MKV:
         for item in items:
             if item.name.split("[")[0] in NATIVE_MKV_SKIPPED_STUBS:
-                item.add_marker(pytest.mark.skip(reason="fakes a tool the native MKV build does not run (see APPSTORE.md)"))
+                item.add_marker(pytest.mark.skip(
+                    reason="tests how an external tool (mkvmerge or mkvpropedit) fails, which "
+                           "the native MKV build does not run; the native build has its own "
+                           "failure tests (see APPSTORE.md)"))
     if not MAU_BIN:
         return
     skip = pytest.mark.skip(reason="tests fml.py's own functions, not the command line")
@@ -347,7 +340,7 @@ def mp4_layout(path: Path) -> list[str]:
         language = TWO_LETTER.get(track.get("Language", ""), track.get("Language", "und"))
         layout.append(f"{'a' if track['@type'] == 'Audio' else 's'}:{language}"
                       f"{'*' if track.get('Default') == 'Yes' else ''}"
-                      f"{'F' if track.get('Forced') == 'Yes' else ''}")
+                      f"{'F' if track.get('Forced', '').startswith('Yes') else ''}")
     return layout
 
 

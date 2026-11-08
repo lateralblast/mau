@@ -253,7 +253,9 @@ pub fn parse_mediainfo_tracks(data: &Value) -> Result<Vec<Track>, String> {
             codec: text(raw.get("Format")),
             language: normalise_language(raw.get("Language").and_then(Value::as_str)),
             default: raw.get("Default").and_then(Value::as_str) == Some("Yes"),
-            forced: raw.get("Forced").and_then(Value::as_str) == Some("Yes"),
+            // mediainfo writes "Yes / No" for a forced MP4 subtitle (and "No" for a plain one), so any
+            // value that starts with "Yes" counts
+            forced: raw.get("Forced").and_then(Value::as_str).is_some_and(|f| f.starts_with("Yes")),
             name: text(raw.get("Title")),
             channels: if kind == Kind::Audio { digits(raw.get("Channels")).unwrap_or(0) as usize } else { 0 },
         });
@@ -326,6 +328,18 @@ pub fn human_size(size: f64) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_forced_mp4_subtitle_is_read_as_forced_whatever_mediainfo_writes_after_yes() {
+        let data = json!({"media": {"track": [
+            {"@type": "Text", "@typeorder": "1", "ID": "3", "Language": "it", "Default": "Yes",
+             "Forced": "Yes / No"},
+            {"@type": "Text", "@typeorder": "2", "ID": "4", "Language": "en", "Default": "No",
+             "Forced": "No"},
+        ]}});
+        let tracks = parse_mediainfo_tracks(&data).unwrap();
+        assert_eq!((tracks[0].forced, tracks[1].forced), (true, false));
+    }
 
     #[test]
     fn mkv_tracks_are_numbered_within_their_kind() {

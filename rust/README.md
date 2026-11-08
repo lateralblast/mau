@@ -94,17 +94,48 @@ check them by hand before relying on them.
 - A symbolic link to a folder is followed by `--recursive`, and a folder reached twice is read once. The
   archived `fml.py` uses `pathlib`'s `rglob`, which may not follow links, depending on the Python version.
 - With no media files, `--dir` says so on stderr. `fml.py` says nothing.
+- The forced flag of an MP4 subtitle track is a `kind` box in the track's `udta` (the role
+  `forced-subtitle`, which ffmpeg writes and `mediainfo` reports as `Forced: Yes / No`). `fml.py` refuses
+  to set it for an MP4; the Rust build sets and clears it in place (`native-mp4`), or with ffmpeg when the
+  file is rewritten anyway.
+- A file cut short inside its track list is an error ("cannot be read as an MKV"). `fml.py` says
+  the file "has no audio track with language ...", which is not the real cause, and reports it as
+  skipped (exit 0) rather than as an error (exit 1).
 - `--info` shows codec names as ffprobe gives them (`aac`, `mpeg4`, `subrip`); `fml.py` shows mkvmerge's
   (`AAC`, `MPEG-4p2`, `SubRip/SRT`) for an MKV. The Rust names are kept: they are the ones used elsewhere
   (for MP4 and AVI, and for JSON). `fml.py` is archived and keeps its output.
 - In a build with `native-mp4`, an MP4's languages, default flags and track order are changed in place (the
   `trak` boxes are moved within `moov`, and nothing else moves). The file is not rewritten, so the index is not
   moved to the front of the file as ffmpeg's rewrite moves it: playback is the same, but a file that streams
-  from a web server may start more slowly. Names, forced flags and removals still use ffmpeg.
+  from a web server may start more slowly. Names and the forced flag of a subtitle are changed the same way,
+  by rebuilding `moov`. Removing tracks rewrites the file in this program too: the removed tracks' chunks are
+  cut out of `mdat` and the chunk offsets of the others are moved (`mp4::remove_traks`), so the result has no
+  index at the front either, and it needs no ffmpeg. A track is matched to its `trak` box by its track ID,
+  not by its place in mediainfo's list, which leaves out tracks such as a timecode track. A kept track that
+  refers to a removed one through `tref` is refused. Adding a SubRip file (`--add subtitle`) is native too: a
+  `tx3g` text track (`mov_text`, as ffmpeg writes it) is appended to `moov`, and its samples go in an `mdat` at the
+  end of the file, so the media data does not move. The track is in alternate group 3, as ffmpeg's subtitle tracks
+  are (mediainfo reports the default flag only for a track in that group), and has the one-segment edit list
+  ffmpeg writes (the readers checked do not need it; it is kept to match ffmpeg's layout). A SubRip, ASS, SSA or
+  WebVTT file is read in this program. Its styling is not kept (an MP4 subtitle here is plain text): override
+  blocks, tags and positions are dropped, and ffmpeg keeps them as `<font>` and `<b>` tags. Cues that overlap, a cue
+  too long for a sample, and a file too big for 32-bit offsets are converted by ffmpeg as before.
+- In a build with `native-mp4`, a text subtitle of an MP4 (`--extract subtitle`) is read in this program, and written
+  as SubRip with no byte order mark, the way ffmpeg writes it. The track's sample entry says which format it is:
+  `mov_text` (`tx3g`), WebVTT (`wvtt`) or TTML (`stpp`). The `mov_text` output matches ffmpeg's bytes on the files
+  checked, including accented text and millisecond times. The WebVTT and TTML readers follow the MP4 specification
+  and are checked against files made for the tests, since ffmpeg in the test environment can't read those two
+  tracks. CEA-608 captions (`c608`) need a caption decoder and are refused with a message.
 - In a build with `native-avi`, the audio streams of an AVI are put in order in place (`--swap`): the stream
   lists are reordered and the stream numbers in the chunks and the index are renamed, and nothing changes
-  size. An AVI with an OpenDML index (`indx`) is refused, where the ffmpeg path would swap it. Removing streams
-  still uses ffmpeg.
+  size. An AVI with an OpenDML index (`indx`) is refused, where the ffmpeg path would swap it. Removing a
+  stream (`--delete track`) is native too: the file is written again, with the stream's chunks and index entries
+  left out, the stream numbers after it moved down, each index offset moved to where its chunk now is, and the
+  header's stream count changed. It is read back before it replaces the file. The same OpenDML refusal applies.
+  The streams come from the header's `strl` lists, not from `mediainfo`: with `native-avi` the track list that
+  `--info`, the Edit dialog and the removal use is read from the same lists (`avi::stream_tracks`), so an AVI whose
+  chunks are in `rec ` lists lists its real streams. `mediainfo` is not needed for an AVI's info, get, delete or
+  preserve in that build. Codec names follow mediainfo's for the common codecs.
 - In a build with `native-detect` on macOS, the clips of an MKV for `--detect` are decoded with Apple's
   AudioToolbox, not ffmpeg: the sound is close to ffmpeg's (correlation 0.95 to 0.99 on the files checked), and
   the languages found were the same. The clip length of a file with no `Duration` in its header is one clip.

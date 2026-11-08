@@ -26,6 +26,7 @@ pub mod model;
 pub mod online;
 pub mod mp4;
 pub mod subtitles;
+pub mod text_subs;
 pub mod track;
 pub mod util;
 mod validate;

@@ -4,9 +4,9 @@ that can be moved about: the tools go in OUT/bin and the libraries in OUT/lib.
 
   usage: bundle_tools.py [--plugins DIR] OUT TOOL [TOOL ...]
 
---plugins DIR copies the shared objects in DIR (whisper.cpp's ggml backends) into OUT/bin, beside the tools: ggml
-looks for its backends in the folder of the program that runs (it does not read GGML_BACKEND_DIR), and the
-libraries they load are rewritten in the same way as the tools'.
+--plugins DIR copies the shared objects in DIR (whisper.cpp's ggml backends) into OUT/bin, beside
+the tools: ggml looks for its backends in the folder of the program that runs (it does not read
+GGML_BACKEND_DIR), and the libraries they load are rewritten in the same way as the tools'.
 
 Each reference to a library that is not in /usr/lib or /System is rewritten (install_name_tool)
 to a path relative to the copy: a tool refers to @loader_path/../lib/<name>, a library to

@@ -271,8 +271,7 @@ fn restore_edits_put_back_a_move_and_a_flag() {
         audio(2, "ita", false),
         audio(3, "eng", false),
     ];
-    let media = Media::new("x.mkv", Container::Mkv);
-    let edits = engine(Kind::Audio).restore_edits(&media, &now, &before, Some(3), &[]);
+    let edits = engine(Kind::Audio).restore_edits(&now, &before, Some(3), &[]);
     let moved = edits.iter().find(|e| e.move_to.is_some()).unwrap();
     assert_eq!((moved.track.number, moved.move_to), (1, Some(3)));
     assert_eq!(moved.default, Some(false));
@@ -281,14 +280,12 @@ fn restore_edits_put_back_a_move_and_a_flag() {
 }
 
 #[test]
-fn restore_edits_leave_the_forced_flag_of_an_mp4_alone() {
+fn restore_edits_put_back_the_forced_flag_of_an_mp4_subtitle_too() {
     let before = vec![Track { forced: true, ..track(1, Kind::Subtitles, "eng", false, 1) }];
     let now = vec![track(1, Kind::Subtitles, "eng", false, 1)];
-    let engine = engine(Kind::Subtitles);
-    let mp4 = engine.restore_edits(&Media::new("x.mp4", Container::Mp4), &now, &before, None, &[]);
-    assert!(mp4.is_empty());
-    let mkv = engine.restore_edits(&Media::new("x.mkv", Container::Mkv), &now, &before, None, &[]);
-    assert_eq!(mkv[0].forced, Some(true));
+    let edits = engine(Kind::Subtitles).restore_edits(&now, &before, None, &[]);
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].forced, Some(true));
 }
 
 #[test]
@@ -393,8 +390,7 @@ fn restore_edits_put_back_a_reorder() {
     // ita eng fre became fre ita eng: the log has the old numbers in the new order, 3 1 2
     let before = four_audio()[..3].to_vec();
     let now = vec![audio(1, "fre", false), audio(2, "ita", true), audio(3, "eng", false)];
-    let media = Media::new("x.mkv", Container::Mkv);
-    let edits = engine(Kind::Audio).restore_edits(&media, &now, &before, None, &[3, 1, 2]);
+    let edits = engine(Kind::Audio).restore_edits(&now, &before, None, &[3, 1, 2]);
     let place = |number: usize| edits.iter().find(|e| e.track.number == number).and_then(|e| e.move_to);
     // fre (now 1) goes back to 3, ita (now 2) to 1, eng (now 3) to 2
     assert_eq!((place(1), place(2), place(3)), (Some(3), Some(1), Some(2)));
@@ -788,4 +784,64 @@ fn an_mkv_needs_only_the_tools_its_action_uses() {
         assert_eq!(tools_for("info", Container::Mkv), ["ffmpeg"]);
         assert_eq!(tools_for("set", Container::Mkv), Container::Mkv.write_tools());
     }
+}
+
+/// A small MKV with two audio tracks (Italian, default; English), made with ffmpeg. None if ffmpeg is missing.
+fn two_audio_mkv(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let path = dir.join("two.mkv");
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=1", "-f", "lavfi", "-i",
+               "sine=frequency=880:duration=1", "-map", "0", "-map", "1", "-metadata:s:a:0", "language=ita",
+               "-metadata:s:a:1", "language=eng", "-c:a", "aac"])
+        .arg(&path)
+        .status()
+        .ok()?;
+    status.success().then_some(path)
+}
+
+#[test]
+fn the_read_back_accepts_the_right_layout_and_refuses_each_wrong_one() {
+    let dir = std::env::temp_dir().join(format!("mau-readback-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let Some(path) = two_audio_mkv(&dir) else {
+        eprintln!("ffmpeg is not installed: the test was not run");
+        return;
+    };
+    let config = Config { file: path.to_string_lossy().into_owned(), ..Config::default() };
+    let (mau, _) = listening(config);
+    let media = Media::new(&path.to_string_lossy(), Container::Mkv);
+    let actual = mau.read_tracks(&media).unwrap();
+    let audio: Vec<Track> = actual.iter().filter(|t| t.kind == Kind::Audio).cloned().collect();
+    assert_eq!(audio.len(), 2, "the fixture has two audio tracks");
+
+    // each case is the layout a change should have made: the file must match it, or the change is refused
+    let check = |expected: &[Track]| -> Option<String> {
+        let mut result = Outcome::new(&media.path, "set", false);
+        mau.verify_layout(&mut result, &media, expected, "native").unwrap();
+        (result.status == Status::Error).then_some(result.message)
+    };
+    let all = actual.clone();
+    assert_eq!(check(&all), None, "the layout that was read is the one expected");
+
+    let mut swapped = all.clone();
+    let (first, second) = (
+        swapped.iter().position(|t| t.kind == Kind::Audio).unwrap(),
+        swapped.iter().rposition(|t| t.kind == Kind::Audio).unwrap(),
+    );
+    swapped.swap(first, second);
+    assert_eq!(check(&swapped).as_deref(), Some("native did not make the change to the file"), "tracks out of order");
+
+    let mut relanguaged = all.clone();
+    relanguaged[first].language = "fre".into();
+    assert!(check(&relanguaged).is_some(), "a language that was not set");
+
+    let mut renamed = all.clone();
+    renamed[first].name = "Renamed".into();
+    assert!(check(&renamed).is_some(), "a name that was not set");
+
+    let mut flagged = all.clone();
+    flagged[first].default = !flagged[first].default;
+    assert!(check(&flagged).is_some(), "a default flag that was not set");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
-from conftest import MAU_BIN, NO_MKVTOOLNIX, Ran, Stubs, mkv_stub_tracks
+from conftest import MAU_BIN, NO_MKVTOOLNIX, Ran, Stubs
 
 import fml
 
@@ -155,17 +155,6 @@ def test_check_needs_no_file(run: Callable[..., Ran], stubs: Stubs) -> None:
                 if line.startswith("Found:")
                 and "whisper" not in line and "MAU_WHISPER" not in line]
     assert len(required) == (2 if NO_MKVTOOLNIX else 4)
-
-
-def test_actions_run_in_the_order_given(run: Callable[..., Ran], fake_mkv: Path,
-                                        stubs: Stubs) -> None:
-    stubs.set(mkv=mkv_stub_tracks([("ita", True)]))
-    ran = run("--get", "lang", "--info", "--get", "lang", "-i", fake_mkv)
-    lines = ran.out.splitlines()
-    assert ran.code == 0
-    assert lines[0] == "ita"
-    assert lines[1].endswith("(Matroska)")
-    assert lines[-1] == "ita"
 
 
 def test_the_new_options_parse(run: Callable[..., Ran], tmp_path: Path) -> None:

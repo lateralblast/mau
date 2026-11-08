@@ -229,7 +229,7 @@ fn build_command() -> Command {
             "set",
             'c',
             "name: set the name of track --track to --name; forced, unforced: set or clear its \
-             forced flag (MKV); track: change the language (--lang), name (--name) and forced flag \
+             forced flag (MKV, and MP4 subtitles); track: change the language (--lang), name (--name) and forced flag \
              (--forced-flag) of track --track together; order: put the tracks of --kind in the order of --order; lang: make --default (or the first of --prefer) the default, or \
              with --lang set the language of track --track (1); default: make track --track the \
              default, and with --lang set its language",
@@ -450,7 +450,7 @@ fn build_command() -> Command {
                 .long("forced-flag")
                 .value_name("{yes,no}")
                 .value_parser(|text: &str| choice_arg(text, &["yes", "no"]))
-                .help("for --set track: set (yes) or clear (no) the forced flag of the track (MKV only)")
+                .help("for --set track: set (yes) or clear (no) the forced flag of the track (MKV, and MP4 subtitle tracks)")
                 .help_heading(settings),
         )
         .arg(

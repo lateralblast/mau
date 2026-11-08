@@ -50,45 +50,6 @@ def mkv_stubs(stubs: Stubs) -> Stubs:
 
 # A dry run shows the plan and runs nothing that changes ---------------------
 
-def test_dry_run_shows_the_changes_and_the_command(run: Callable[..., Ran], fake_mkv: Path,
-                                                   mkv_stubs: Stubs) -> None:
-    before = fake_mkv.read_bytes()
-    ran = run("--set", "lang", "--default", "English", "-i", fake_mkv, "-T", "-v")
-    assert ran.code == 0
-    assert ran.out.splitlines() == [
-        f"[dry-run] {fake_mkv}: audio track 1 (ita): default yes -> no",
-        f"[dry-run] {fake_mkv}: audio track 2 (eng): default no -> yes"]
-    assert mkv_tool("mkvpropedit") in ran.err and "Copying:" in ran.err
-    assert fake_mkv.read_bytes() == before
-    assert leftovers(fake_mkv.parent) == []
-
-
-def test_dry_run_json_records_the_plan(run: Callable[..., Ran], fake_mkv: Path,
-                                       mkv_stubs: Stubs) -> None:
-    ran = run("--set", "lang", "--default", "English", "-i", fake_mkv, "-T", "-F", "json")
-    document = json.loads(ran.out)
-    assert document["dry_run"] is True and document["version"] == fml.__version__
-    (result,) = document["results"]
-    assert result["status"] == "changed" and result["dry_run"] is True
-    assert result["changes"] == ["audio track 1 (ita): default yes -> no",
-                                 "audio track 2 (eng): default no -> yes"]
-    assert result["commands"][0][0] == mkv_tool("mkvpropedit")
-    if NO_MKVTOOLNIX:
-        # the disposition, in ffmpeg's words (+default, -default)
-        assert any("default" in arg for arg in result["commands"][0])
-    else:
-        assert result["commands"][0][-1] == "flag-default=1"
-
-
-def test_json_keeps_stdout_clean(run: Callable[..., Ran], fake_mkv: Path,
-                                 mkv_stubs: Stubs) -> None:
-    ran = run("--set", "lang", "--default", "Spanish", "-i", fake_mkv, "-F", "json", "-v")
-    assert ran.code == 0
-    (result,) = json.loads(ran.out)["results"]  # only the document is on stdout
-    assert result["status"] == "skipped"
-    assert result["message"] == 'has no audio track with language "spa"'
-    assert ran.err.startswith("Executing:")  # --verbose output goes to stderr
-
 
 # Failures leave the original alone ------------------------------------------
 
@@ -156,15 +117,6 @@ def test_an_edit_that_leaves_the_language_alone_is_caught(run: Callable[..., Ran
     assert fake_mkv.read_bytes() == before
 
 
-def test_an_edit_that_sets_the_language_is_accepted(run: Callable[..., Ran], fake_mkv: Path,
-                                                    mkv_stubs: Stubs) -> None:
-    mkv_stubs.set(mkv_after=mkv_stub_tracks([("ita", True), ("spa", False), ("fre", False)],
-                                            SUBS2))
-    ran = run("--set", "lang", "--lang", "Spanish", "--track", "2", "-i", fake_mkv)
-    assert ran.code == 0, ran.err
-    assert ran.out.strip() == f"{fake_mkv}: audio track 2: language eng -> spa"
-
-
 def test_removal_with_the_wrong_tracks_is_rejected(run: Callable[..., Ran], fake_mkv: Path,
                                                    mkv_stubs: Stubs) -> None:
     """mkvmerge exits 0, but the new file still has the English track."""
@@ -173,15 +125,6 @@ def test_removal_with_the_wrong_tracks_is_rejected(run: Callable[..., Ran], fake
     assert ran.code == 1
     assert f"{mkv_tool('mkvmerge')} did not make the change to the file" in ran.err
     assert fake_mkv.read_bytes() == before and leftovers(fake_mkv.parent) == []
-
-
-def test_removal_with_the_right_tracks_is_accepted(run: Callable[..., Ran], fake_mkv: Path,
-                                                   mkv_stubs: Stubs) -> None:
-    mkv_stubs.set(mkv_after=mkv_stub_tracks([("ita", True), ("fre", False)], SUBS2))
-    ran = run("--delete", "lang", "--lang", "eng", "-i", fake_mkv)
-    assert ran.code == 0, ran.err
-    assert ran.out.strip() == f"{fake_mkv}: removed audio track 2 (eng)"
-    assert leftovers(fake_mkv.parent) == []
 
 
 @needs_mkvtoolnix
@@ -200,7 +143,9 @@ def test_mkvmerge_errors_fail_the_file(run: Callable[..., Ran], fake_mkv: Path,
     assert leftovers(fake_mkv.parent) == []
 
 
-@pytest.mark.skipif(NATIVE_MP4, reason="fake MP4 file: the native MP4 edit reads the real file (the stub ffmpeg is not run)")
+@pytest.mark.skipif(NATIVE_MP4,
+                reason="fake MP4 file: the native MP4 edit reads the real file "
+                       "(the stub ffmpeg is not run)")
 def test_an_mp4_flag_that_ffmpeg_ignores_is_caught(run: Callable[..., Ran], fake_mp4: Path,
                                                    stubs: Stubs) -> None:
     stubs.set(mi=[mi_track("Audio", 1, "it", True), mi_track("Audio", 2, "en", False)])
@@ -209,7 +154,9 @@ def test_an_mp4_flag_that_ffmpeg_ignores_is_caught(run: Callable[..., Ran], fake
     assert fake_mp4.read_bytes() == MP4_HEADER and leftovers(fake_mp4.parent) == []
 
 
-@pytest.mark.skipif(NATIVE_MP4, reason="fake MP4 file: the native MP4 edit reads the real file (the stub ffmpeg is not run)")
+@pytest.mark.skipif(NATIVE_MP4,
+                reason="fake MP4 file: the native MP4 edit reads the real file "
+                       "(the stub ffmpeg is not run)")
 def test_an_mp4_edit_that_ffmpeg_applies_is_accepted(run: Callable[..., Ran], fake_mp4: Path,
                                                      stubs: Stubs) -> None:
     stubs.set(mi=[mi_track("Audio", 1, "it", True), mi_track("Audio", 2, "en", False)],
@@ -219,7 +166,9 @@ def test_an_mp4_edit_that_ffmpeg_applies_is_accepted(run: Callable[..., Ran], fa
     assert leftovers(fake_mp4.parent) == []
 
 
-@pytest.mark.skipif(NATIVE_MP4, reason="fake MP4 file: the native MP4 edit reads the real file (the stub ffmpeg is not run)")
+@pytest.mark.skipif(NATIVE_MP4,
+                reason="fake MP4 file: the native MP4 edit reads the real file "
+                       "(the stub ffmpeg is not run)")
 def test_a_failing_ffmpeg_is_reported(run: Callable[..., Ran], fake_mp4: Path,
                                       stubs: Stubs) -> None:
     stubs.set(mi=[mi_track("Audio", 1, "it", True), mi_track("Audio", 2, "en", False)],
@@ -241,21 +190,6 @@ def test_one_bad_file_does_not_stop_the_rest(run: Callable[..., Ran], tmp_path: 
 
 
 # Safeguards ------------------------------------------------------------------
-
-def test_refuses_to_remove_every_audio_track(run: Callable[..., Ran], fake_mkv: Path,
-                                             stubs: Stubs) -> None:
-    stubs.set(mkv=mkv_stub_tracks([("eng", True)]))
-    ran = run("--delete", "lang", "--lang", "eng", "-i", fake_mkv)
-    assert ran.code == 0 and "would remove every audio track (use --force" in ran.err
-    assert leftovers(fake_mkv.parent) == []
-
-
-def test_force_allows_removing_every_audio_track(run: Callable[..., Ran], fake_mkv: Path,
-                                                 stubs: Stubs) -> None:
-    stubs.set(mkv=mkv_stub_tracks([("eng", True)]), mkv_after=mkv_stub_tracks([]))
-    ran = run("--delete", "lang", "--lang", "eng", "--force", "-i", fake_mkv)
-    assert ran.code == 0, ran.err
-    assert ran.out.strip() == f"{fake_mkv}: removed audio track 1 (eng)"
 
 
 def test_removing_every_subtitle_track_needs_no_force(run: Callable[..., Ran], fake_mkv: Path,
@@ -373,19 +307,6 @@ def test_leftover_temporary_files_are_not_treated_as_media(run: Callable[..., Ra
     assert ran.out.count("(Matroska)") == 1 and "fml-tmp" not in ran.out
 
 
-def test_directory_mode_skips_other_files_quietly(run: Callable[..., Ran], tmp_path: Path,
-                                                  mkv_stubs: Stubs) -> None:
-    (tmp_path / "a.mkv").write_bytes(mau_header())
-    (tmp_path / "notes.txt").write_text("not media")
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "b.mkv").write_bytes(mau_header())
-    flat = run("--get", "lang", "-d", tmp_path)
-    assert flat.out.splitlines() == [f"{tmp_path / 'a.mkv'}: ita"] and flat.err == ""
-    deep = run("--get", "lang", "-d", tmp_path, "-r")
-    assert deep.out.splitlines() == [f"{tmp_path / 'a.mkv'}: ita",
-                                     f"{tmp_path / 'sub' / 'b.mkv'}: ita"]
-
-
 def test_directory_mode_is_in_sorted_order(run: Callable[..., Ran], tmp_path: Path,
                                            mkv_stubs: Stubs) -> None:
     for name in ("c.mkv", "a.mkv", "b.mkv"):
@@ -472,7 +393,8 @@ def test_install_on_another_system_says_so(run: Callable[..., Ran], no_tools: Pa
 
 def test_an_action_names_the_commands_it_needs(run: Callable[..., Ran], fake_mkv: Path,
                                                fake_mp4: Path, no_tools: Path) -> None:
-    # with the native MKV build an MKV edit needs no tool at all (so it is not refused for a missing one)
+    # with the native MKV build an MKV edit needs no tool at all (so it is not refused for a
+    # missing one)
     if not NATIVE_MKV:
         mkv = run("--set", "lang", "--default", "English", "-i", fake_mkv)
         missing = "mkvmerge, mkvpropedit" if not NO_MKVTOOLNIX else "mediainfo, ffmpeg"
@@ -500,7 +422,9 @@ def mi_named(kind: str, order: int, language: str, default: bool, title: str) ->
     return track
 
 
-@pytest.mark.skipif(NATIVE_MP4, reason="fake MP4 file: the native MP4 edit reads the real file (the stub ffmpeg is not run)")
+@pytest.mark.skipif(NATIVE_MP4,
+                reason="fake MP4 file: the native MP4 edit reads the real file "
+                       "(the stub ffmpeg is not run)")
 def test_an_mp4_that_loses_a_track_name_is_caught(run: Callable[..., Ran], fake_mp4: Path,
                                                   stubs: Stubs) -> None:
     """The flags are right in the new file, but the name has gone: not replaced."""
@@ -513,7 +437,9 @@ def test_an_mp4_that_loses_a_track_name_is_caught(run: Callable[..., Ran], fake_
     assert fake_mp4.read_bytes() == MP4_HEADER
 
 
-@pytest.mark.skipif(NATIVE_MP4, reason="fake MP4 file: the native MP4 edit reads the real file (the stub ffmpeg is not run)")
+@pytest.mark.skipif(NATIVE_MP4,
+                reason="fake MP4 file: the native MP4 edit reads the real file "
+                       "(the stub ffmpeg is not run)")
 def test_an_mp4_that_keeps_its_names_is_accepted(run: Callable[..., Ran], fake_mp4: Path,
                                                  stubs: Stubs) -> None:
     stubs.set(mi=[mi_named("Audio", 1, "it", True, "Italiano"),
@@ -523,7 +449,9 @@ def test_an_mp4_that_keeps_its_names_is_accepted(run: Callable[..., Ran], fake_m
     assert run("--set", "lang", "--default", "English", "-i", fake_mp4).code == 0
 
 
-@pytest.mark.skipif(NATIVE_MP4, reason="fake MP4 file: the native MP4 edit reads the real file (the stub ffmpeg is not run)")
+@pytest.mark.skipif(NATIVE_MP4,
+                reason="fake MP4 file: the native MP4 edit reads the real file "
+                       "(the stub ffmpeg is not run)")
 def test_the_ffmpeg_command_writes_the_names_back(run: Callable[..., Ran], fake_mp4: Path,
                                                   stubs: Stubs) -> None:
     stubs.set(mi=[mi_named("Video", 1, "", False, "Film"),
@@ -549,32 +477,10 @@ def test_a_removal_that_loses_names_is_caught(run: Callable[..., Ran], fake_mkv:
 
 # Removing the default track ----------------------------------------------------
 
-def test_removing_the_default_audio_makes_the_next_one_default(
-        run: Callable[..., Ran], fake_mkv: Path, stubs: Stubs) -> None:
-    stubs.set(mkv=mkv_stub_tracks([("ita", True), ("eng", False), ("fre", False)]),
-              mkv_after=mkv_stub_tracks([("eng", True), ("fre", False)]))
-    ran = run("--delete", "lang", "--lang", "ita", "-i", fake_mkv, "-T", "-v")
-    assert ran.out.splitlines() == [f"[dry-run] {fake_mkv}: removed audio track 1 (ita)",
-                                    f"[dry-run] {fake_mkv}: audio track 2 (eng): default no -> yes"]
-    assert ("+default" if NO_MKVTOOLNIX else "--default-track-flag 2:1") in ran.err
-    assert run("--delete", "lang", "--lang", "ita", "-i", fake_mkv).code == 0
 
-
-def test_removing_a_track_that_is_not_the_default_promotes_nothing(
-        run: Callable[..., Ran], fake_mkv: Path, stubs: Stubs) -> None:
-    stubs.set(mkv=mkv_stub_tracks(AUDIO3))
-    ran = run("--delete", "lang", "--lang", "eng", "-i", fake_mkv, "-T", "-v")
-    assert ran.out.splitlines() == [f"[dry-run] {fake_mkv}: removed audio track 2 (eng)"]
-    assert "--default-track-flag" not in ran.err
-
-
-def test_an_mkv_may_be_left_with_no_default_subtitle(run: Callable[..., Ran], fake_mkv: Path,
-                                                     stubs: Stubs) -> None:
-    stubs.set(mkv=mkv_stub_tracks(AUDIO3, [("eng", True), ("ita", False)]))
-    ran = run("--delete", "lang", "--lang", "eng", "--kind", "sub", "-i", fake_mkv, "-T")
-    assert ran.out.splitlines() == [f"[dry-run] {fake_mkv}: removed subtitle track 1 (eng)"]
-
-
+@pytest.mark.skipif(NATIVE_MP4,
+                    reason="fake MP4 file: the native MP4 edit reads the real file (the stub "
+                           "ffmpeg is not run)")
 def test_an_mp4_always_gets_a_default_subtitle(run: Callable[..., Ran], fake_mp4: Path,
                                                stubs: Stubs) -> None:
     stubs.set(mi=[mi_track("Audio", 1, "it", True), mi_track("Text", 1, "en", True),
@@ -589,38 +495,6 @@ def test_an_mp4_always_gets_a_default_subtitle(run: Callable[..., Ran], fake_mp4
 
 def good_edit(stubs: Stubs) -> None:
     stubs.set(mkv_after=mkv_stub_tracks([("ita", False), ("eng", True), ("fre", False)], SUBS2))
-
-
-def test_backup_keeps_the_original_as_a_hard_link(run: Callable[..., Ran], fake_mkv: Path,
-                                                  mkv_stubs: Stubs) -> None:
-    good_edit(mkv_stubs)
-    fake_mkv.write_bytes(fake_mkv.read_bytes() + b"original")
-    inode = fake_mkv.stat().st_ino
-    ran = run("--set", "lang", "--default", "English", "-i", fake_mkv, "--backup")
-    backup = Path(str(fake_mkv) + fml.BACKUP_MARK)
-    assert ran.code == 0, ran.err
-    assert ran.out.splitlines()[-1] == f"{fake_mkv}: the original is kept as {backup}"
-    assert backup.exists() and backup.stat().st_ino == inode and backup.stat().st_nlink == 1
-    assert leftovers(fake_mkv.parent) == []
-
-
-def test_backup_json_names_the_backup(run: Callable[..., Ran], fake_mkv: Path,
-                                      mkv_stubs: Stubs) -> None:
-    good_edit(mkv_stubs)
-    ran = run("--set", "lang", "--default", "English", "-i", fake_mkv, "--backup", "-F", "json")
-    (result,) = json.loads(ran.out)["results"]
-    assert result["backup"] == str(fake_mkv) + fml.BACKUP_MARK
-    plain = json.loads(run("--set", "lang", "--default", "Spanish", "-i", fake_mkv, "-F",
-                           "json").out)["results"][0]
-    assert plain["backup"] is None
-
-
-def test_backup_dry_run_only_plans_it(run: Callable[..., Ran], fake_mkv: Path,
-                                      mkv_stubs: Stubs) -> None:
-    ran = run("--set", "lang", "--default", "English", "-i", fake_mkv, "--backup", "-T")
-    assert ran.out.splitlines()[-1] == (
-        f"[dry-run] {fake_mkv}: the original would be kept as {fake_mkv}{fml.BACKUP_MARK}")
-    assert not Path(str(fake_mkv) + fml.BACKUP_MARK).exists()
 
 
 def test_backup_falls_back_to_a_copy_when_links_are_not_possible(
@@ -661,13 +535,6 @@ def test_a_backup_that_cannot_be_made_stops_the_replacement(
     assert not Path(str(fake_mkv) + fml.BACKUP_MARK).exists()
 
 
-def test_backup_is_not_made_when_nothing_changes(run: Callable[..., Ran], fake_mkv: Path,
-                                                 mkv_stubs: Stubs) -> None:
-    ran = run("--set", "lang", "--default", "Italian", "-i", fake_mkv, "--backup")
-    assert "is already the default" in ran.out
-    assert not Path(str(fake_mkv) + fml.BACKUP_MARK).exists()
-
-
 def test_backups_are_not_treated_as_media(run: Callable[..., Ran], tmp_path: Path,
                                           mkv_stubs: Stubs) -> None:
     (tmp_path / "a.mkv").write_bytes(mau_header())
@@ -677,32 +544,6 @@ def test_backups_are_not_treated_as_media(run: Callable[..., Ran], tmp_path: Pat
 
 
 # The log -----------------------------------------------------------------------
-
-def test_log_lines_describe_the_change(run: Callable[..., Ran], fake_mkv: Path,
-                                       mkv_stubs: Stubs, tmp_path: Path) -> None:
-    good_edit(mkv_stubs)
-    mkv_stubs.set(mark=True)
-    log = tmp_path / "changes.jsonl"
-    run("--set", "lang", "--default", "English", "-i", fake_mkv, "--log", log)
-    (line,) = log.read_text().splitlines()
-    entry = json.loads(line)
-    assert entry["file"] == str(fake_mkv.resolve()) and entry["action"] == "set"
-    assert entry["kind"] == "audio" and entry["version"] == fml.__version__
-    assert entry["changes"] == ["audio track 1 (ita): default yes -> no",
-                                "audio track 2 (eng): default no -> yes"]
-    assert [t["default"] for t in entry["before"] if t["type"] == "audio"] == [True, False, False]
-    assert [t["default"] for t in entry["after"] if t["type"] == "audio"] == [False, True, False]
-    assert entry["backup"] is None and entry["moved_from"] is None and "time" in entry
-
-
-def test_log_is_added_to_not_replaced(run: Callable[..., Ran], fake_mkv: Path, tmp_path: Path,
-                                      mkv_stubs: Stubs) -> None:
-    log = tmp_path / "changes.jsonl"
-    log.write_text('{"earlier": "entry"}\n')
-    good_edit(mkv_stubs)
-    run("--set", "lang", "--default", "English", "-i", fake_mkv, "--log", log)
-    lines = log.read_text().splitlines()
-    assert lines[0] == '{"earlier": "entry"}' and len(lines) == 2
 
 
 @pytest.mark.parametrize("args", [
@@ -723,14 +564,6 @@ def test_a_dry_run_logs_nothing(run: Callable[..., Ran], fake_mkv: Path, tmp_pat
     log = tmp_path / "changes.jsonl"
     run("--set", "lang", "--default", "English", "-i", fake_mkv, "--log", log, "-T")
     assert not log.exists()
-
-
-def test_a_log_that_cannot_be_written_is_a_warning(run: Callable[..., Ran], fake_mkv: Path,
-                                                   tmp_path: Path, mkv_stubs: Stubs) -> None:
-    good_edit(mkv_stubs)
-    ran = run("--set", "lang", "--default", "English", "-i", fake_mkv,
-              "--log", tmp_path / "no-such-folder" / "l.jsonl")
-    assert ran.code == 0 and "could not write the log" in ran.err  # the change was still made
 
 
 # --include and --exclude -------------------------------------------------------
@@ -798,31 +631,6 @@ def many(tmp_path: Path, mkv_stubs: Stubs) -> list[Path]:
     return paths
 
 
-def test_jobs_give_the_same_output_in_the_same_order(run: Callable[..., Ran], tmp_path: Path,
-                                                     many: list[Path]) -> None:
-    sequential = run("--set", "lang", "--default", "English", "-d", tmp_path, "-T")
-    parallel = run("--set", "lang", "--default", "English", "-d", tmp_path, "-T", "-j", "4")
-    assert parallel.out == sequential.out and parallel.code == sequential.code == 0
-    assert [line.split(":")[0].split("/")[-1] for line in parallel.out.splitlines()][::2] == [
-        f"e{n}.mkv" for n in range(8)]
-
-
-def test_jobs_make_every_change(run: Callable[..., Ran], tmp_path: Path, many: list[Path]) -> None:
-    ran = run("--set", "lang", "--default", "English", "-d", tmp_path, "-j", "3", "-F", "json")
-    results = json.loads(ran.out)["results"]
-    assert [r["status"] for r in results] == ["changed"] * 8
-    assert [Path(r["file"]).name for r in results] == [f"e{n}.mkv" for n in range(8)]
-    assert leftovers(tmp_path) == []
-
-
-def test_jobs_log_every_change_as_valid_json(run: Callable[..., Ran], tmp_path: Path,
-                                             many: list[Path]) -> None:
-    log = tmp_path.parent / f"{tmp_path.name}.jsonl"
-    run("--set", "lang", "--default", "English", "-d", tmp_path, "-j", "4", "--log", log)
-    entries = [json.loads(line) for line in log.read_text().splitlines()]
-    assert sorted(Path(e["file"]).name for e in entries) == [f"e{n}.mkv" for n in range(8)]
-
-
 def test_jobs_with_failures_report_each_in_order(run: Callable[..., Ran], tmp_path: Path,
                                                  many: list[Path], mkv_stubs: Stubs) -> None:
     mkv_stubs.set(mkvpropedit_exit=2)
@@ -877,7 +685,3 @@ def test_an_interrupt_during_parallel_work_stops_cleanly(
     assert ran.code == 130 and "interrupted" in ran.err
     assert leftovers(tmp_path) == []
 
-
-def test_one_job_for_one_file_is_run_directly(run: Callable[..., Ran], fake_mkv: Path,
-                                              mkv_stubs: Stubs) -> None:
-    assert run("--get", "lang", "-i", fake_mkv, "-j", "8").out == "ita\n"

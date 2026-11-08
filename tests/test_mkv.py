@@ -1352,3 +1352,227 @@ def test_an_empty_folder_says_so(run: Callable[..., Ran], tmp_path: Path) -> Non
     ran = run("--set", "lang", "--default", "English", "--dir", tmp_path / "empty", "--recursive")
     assert ran.code == 0
     assert "no media files found" in ran.err
+
+
+# Dry runs, JSON, backups and the log, on real files (these were stub tests) ----------
+
+def test_a_dry_run_shows_each_change_and_changes_nothing(run: Callable[..., Ran],
+                                                         film_mkv: Path) -> None:
+    before = film_mkv.read_bytes()
+    ran = run("--set", "lang", "--default", "English", "-i", film_mkv, "-T")
+    assert ran.code == 0 and ran.out.splitlines() == [
+        f"[dry-run] {film_mkv}: audio track 1 (ita): default yes -> no",
+        f"[dry-run] {film_mkv}: audio track 2 (eng): default no -> yes"]
+    assert film_mkv.read_bytes() == before and leftovers(film_mkv.parent) == []
+
+
+def test_a_dry_run_json_records_the_plan(run: Callable[..., Ran], film_mkv: Path) -> None:
+    before = film_mkv.read_bytes()
+    document = json.loads(run("--set", "lang", "--default", "English", "-i", film_mkv,
+                              "-T", "-F", "json").out)
+    assert document["dry_run"] is True and document["version"] == fml.__version__
+    (result,) = document["results"]
+    assert result["status"] == "changed" and result["dry_run"] is True
+    assert result["changes"] == ["audio track 1 (ita): default yes -> no",
+                                 "audio track 2 (eng): default no -> yes"]
+    assert film_mkv.read_bytes() == before
+
+
+def test_json_keeps_stdout_to_the_document(run: Callable[..., Ran], film_mkv: Path) -> None:
+    ran = run("--set", "lang", "--default", "Spanish", "-i", film_mkv, "-F", "json", "-v")
+    assert ran.code == 0
+    (result,) = json.loads(ran.out)["results"]  # the only thing on stdout
+    assert result["status"] == "skipped"
+    assert result["message"] == 'has no audio track with language "spa"'
+
+
+def test_the_json_names_the_backup_only_when_one_was_made(run: Callable[..., Ran],
+                                                          film_mkv: Path) -> None:
+    result = json.loads(run("--set", "lang", "--default", "English", "-i", film_mkv,
+                            "--backup", "-F", "json").out)["results"][0]
+    assert result["backup"] == str(film_mkv) + fml.BACKUP_MARK
+    plain = json.loads(run("--set", "lang", "--default", "Spanish", "-i", film_mkv,
+                           "-F", "json").out)["results"][0]
+    assert plain["backup"] is None
+
+
+def test_a_backup_dry_run_says_what_it_would_keep(run: Callable[..., Ran],
+                                                  film_mkv: Path) -> None:
+    ran = run("--set", "lang", "--default", "English", "-i", film_mkv, "--backup", "-T")
+    assert ran.out.splitlines()[-1] == (
+        f"[dry-run] {film_mkv}: the original would be kept as {film_mkv}{fml.BACKUP_MARK}")
+    assert not Path(str(film_mkv) + fml.BACKUP_MARK).exists()
+
+
+def test_no_backup_is_made_when_nothing_changes(run: Callable[..., Ran], film_mkv: Path) -> None:
+    ran = run("--set", "lang", "--default", "Italian", "-i", film_mkv, "--backup")
+    assert "is already the default" in ran.out
+    assert not Path(str(film_mkv) + fml.BACKUP_MARK).exists()
+
+
+def test_the_log_describes_the_change(run: Callable[..., Ran], film_mkv: Path,
+                                      tmp_path: Path) -> None:
+    log = tmp_path / "changes.jsonl"
+    run("--set", "lang", "--default", "English", "-i", film_mkv, "--log", log)
+    (line,) = log.read_text().splitlines()
+    entry = json.loads(line)
+    assert entry["file"] == str(film_mkv.resolve()) and entry["action"] == "set"
+    assert entry["kind"] == "audio" and entry["version"] == fml.__version__
+    assert entry["changes"] == ["audio track 1 (ita): default yes -> no",
+                                "audio track 2 (eng): default no -> yes"]
+    assert [t["default"] for t in entry["before"] if t["type"] == "audio"] == [True, False, False]
+    assert [t["default"] for t in entry["after"] if t["type"] == "audio"] == [False, True, False]
+    assert entry["backup"] is None and entry["moved_from"] is None and "time" in entry
+
+
+def test_the_log_is_added_to_not_replaced(run: Callable[..., Ran], film_mkv: Path,
+                                          tmp_path: Path) -> None:
+    log = tmp_path / "changes.jsonl"
+    log.write_text('{"earlier": "entry"}\n')
+    run("--set", "lang", "--default", "English", "-i", film_mkv, "--log", log)
+    lines = log.read_text().splitlines()
+    assert lines[0] == '{"earlier": "entry"}' and len(lines) == 2
+
+
+def test_a_log_that_cannot_be_written_is_a_warning(run: Callable[..., Ran], film_mkv: Path,
+                                                   tmp_path: Path) -> None:
+    ran = run("--set", "lang", "--default", "English", "-i", film_mkv,
+              "--log", tmp_path / "no-such-folder" / "l.jsonl")
+    assert ran.code == 0 and "could not write the log" in ran.err
+    assert mkv_layout(film_mkv)[1] == "a:eng*"  # the change was still made
+
+
+def test_actions_run_in_the_order_given_on_a_real_file(run: Callable[..., Ran],
+                                                       film_mkv: Path) -> None:
+    ran = run("--get", "lang", "--info", "--get", "lang", "-i", film_mkv)
+    lines = ran.out.splitlines()
+    assert ran.code == 0
+    assert lines[0] == "ita" and lines[1].endswith("(Matroska)") and lines[-1] == "ita"
+
+
+def make_folder(make: Callable[..., Path], tmp_path: Path, count: int = 8) -> Path:
+    folder = tmp_path / "jobs"
+    for number in range(count):
+        make(f"e{number}.mkv", [("ita", None, True), ("eng", None, False)], where=folder)
+    return folder
+
+
+def test_jobs_report_every_file_in_the_order_given(run: Callable[..., Ran], tmp_path: Path,
+                                                   make: Callable[..., Path]) -> None:
+    folder = make_folder(make, tmp_path)
+    ran = run("--set", "lang", "--default", "English", "-d", folder, "-j", "4", "-F", "json")
+    results = json.loads(ran.out)["results"]
+    assert [Path(r["file"]).name for r in results] == [f"e{n}.mkv" for n in range(8)]
+    assert all(r["status"] == "changed" for r in results)
+    assert all(mkv_layout(folder / f"e{n}.mkv") == ["a:ita", "a:eng*"] for n in range(8))
+    assert leftovers(folder) == []
+
+
+def test_jobs_log_every_change_as_valid_json(run: Callable[..., Ran], tmp_path: Path,
+                                             make: Callable[..., Path]) -> None:
+    folder = make_folder(make, tmp_path)
+    log = tmp_path / "jobs.jsonl"
+    run("--set", "lang", "--default", "English", "-d", folder, "-j", "4", "--log", log)
+    entries = [json.loads(line) for line in log.read_text().splitlines()]
+    assert sorted(Path(e["file"]).name for e in entries) == [f"e{n}.mkv" for n in range(8)]
+
+
+def test_one_job_for_one_file_is_run_directly(run: Callable[..., Ran], film_mkv: Path) -> None:
+    assert run("--get", "lang", "-i", film_mkv, "-j", "8").out == "ita\n"
+
+
+# Files that are broken or too big to finish (the native build has its own failure paths) -----
+
+def cut_short_inside_the_tracks(film_mkv: Path, where: Path) -> Path:
+    """A copy of the film cut off part way through its track list (the file is shorter than
+    its Tracks element)."""
+    data = film_mkv.read_bytes()
+    cut = data.find(bytes([0x16, 0x54, 0xAE, 0x6B])) + 40
+    path = where / "cut.mkv"
+    path.write_bytes(data[:cut])
+    return path
+
+
+def test_a_file_cut_short_inside_its_tracks_is_left_alone(run: Callable[..., Ran],
+                                                          film_mkv: Path, tmp_path: Path) -> None:
+    path = cut_short_inside_the_tracks(film_mkv, tmp_path)
+    before = path.read_bytes()
+    ran = run("--set", "lang", "--default", "English", "-i", path)
+    assert path.read_bytes() == before, "the cut-short file is not changed"
+    assert leftovers(tmp_path) == [], "no temporary file is left"
+    if MAU_BIN:
+        assert ran.code == 1 and "cannot be read as an MKV" in ran.err, ran.err
+    else:  # fml.py's warning, see rust/README.md
+        assert ran.code == 0 and "has no audio track" in ran.err, ran.err
+
+
+def unknown_size_cluster(data: bytes) -> bytes:
+    """The same file with the size of its first cluster set to 'unknown' (all ones), as live
+    muxers write it."""
+    at = data.find(bytes([0x1F, 0x43, 0xB6, 0x75])) + 4
+    length = 1
+    while not data[at] & (0x80 >> (length - 1)):
+        length += 1
+    unknown = bytes([(0x80 >> (length - 1)) | ((1 << (8 - length)) - 1)]) + b"\xff" * (length - 1)
+    return data[:at] + unknown + data[at + length:]
+
+
+@pytest.mark.skipif(not NATIVE_MKV,
+                    reason="the native build reads a cluster of unknown size; the default build "
+                           "refuses it")
+def test_the_native_build_changes_a_file_with_a_cluster_of_unknown_size(run: Callable[..., Ran],
+                                                                      film_mkv: Path,
+                                                                      tmp_path: Path) -> None:
+    path = tmp_path / "live.mkv"
+    path.write_bytes(unknown_size_cluster(film_mkv.read_bytes()))
+    ran = run("--set", "lang", "--default", "English", "-i", path)
+    assert ran.code == 0, ran.err
+    assert mkv_layout(path)[:2] == ["a:ita", "a:eng*"]
+    assert leftovers(tmp_path) == []
+
+
+# Failures of the files themselves, on real files (both builds) -------------------------------
+
+@pytest.mark.parametrize("jobs", ["1", "3"])
+def test_a_bad_file_in_a_batch_does_not_stop_the_others(run: Callable[..., Ran], film_mkv: Path,
+                                                        tmp_path: Path, jobs: str) -> None:
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    (folder / "a-good.mkv").write_bytes(film_mkv.read_bytes())
+    cut_short_inside_the_tracks(film_mkv, folder).rename(folder / "b-cut.mkv")
+    ran = run("--set", "lang", "--default", "English", "-d", folder, "-j", jobs, "-F", "json")
+    results = json.loads(ran.out)["results"]
+    names = [Path(r["file"]).name for r in results]
+    assert names == ["a-good.mkv", "b-cut.mkv"], "every file is reported, in order"
+    by_name = {Path(r["file"]).name: r for r in results}
+    if MAU_BIN:
+        assert by_name["b-cut.mkv"]["status"] == "error"
+        assert "cannot be read as an MKV" in by_name["b-cut.mkv"]["message"]
+        assert ran.code == 1
+    else:
+        # fml.py still reports the cut-short file as having no track (see rust/README.md)
+        assert by_name["b-cut.mkv"]["status"] == "skipped"
+        assert ran.code == 0
+    assert by_name["a-good.mkv"]["status"] == "changed"
+    assert mkv_layout(folder / "a-good.mkv")[:2] == ["a:ita", "a:eng*"]
+    assert leftovers(folder) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="a folder's permissions do not stop a change on Windows, or for root")
+def test_a_folder_that_cannot_be_written_leaves_the_file_alone(run: Callable[..., Ran],
+                                                              film_mkv: Path,
+                                                               tmp_path: Path) -> None:
+    folder = tmp_path / "locked"
+    folder.mkdir()
+    path = folder / "film.mkv"
+    path.write_bytes(film_mkv.read_bytes())
+    before = path.read_bytes()
+    os.chmod(folder, 0o555)  # the copy cannot be made beside the file
+    try:
+        ran = run("--set", "lang", "--default", "English", "-i", path)
+    finally:
+        os.chmod(folder, 0o755)
+    assert ran.code == 1, ran.err
+    assert path.read_bytes() == before, "the file is not changed"
+    assert leftovers(folder) == []

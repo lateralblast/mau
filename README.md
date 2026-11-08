@@ -261,7 +261,7 @@ technical report** everything `mediainfo` knows about it. From there:
 - **For all the ticked files**: **Preview this order…**, **Preview removing this
   language…** and **Preview for all ticked files…** apply what you set up here
   to the other files, matching tracks by language, and show the usual preview.
-- **Edit a track**: the picked track's language, name and forced flag (MKV),
+- **Edit a track**: the picked track's language, name and forced flag (MKV, and MP4 subtitles),
   with **Save changes…**, and **Extract…** for a subtitle track, which asks
   where to save the file.
 - **Add a subtitle file**: choose the file, its language (guessed from the file
@@ -639,9 +639,10 @@ the track with `--track`, and `--kind sub` works on subtitles:
 ```
 
 A name that starts with a dash has to be written with an equals sign,
-`--name=-text`, or it is taken for an option. The forced flag can only be set
-for MKV files, because `mediainfo` can't read it from an MP4 to check the
-change; names work for both.
+`--name=-text`, or it is taken for an option. The forced flag can be set for
+MKV tracks and for MP4 subtitle tracks (an MP4 keeps it as a `kind` box that
+`mediainfo` reads back); it can't be set on an MP4 audio track. Names work for
+both.
 
 #### Several settings at once
 
@@ -650,7 +651,7 @@ several properties of one track in one edit of the file, where `--set lang`,
 `--set name` and `--set forced` each make a change of their own. Only what is
 given is changed; an empty `--name ""` removes the name. The track is chosen as
 with `--delete track` (`--track 2`, `--track subtitles:3`, `--track id:5`,
-`--track name:Forced`). The forced flag is MKV only.
+`--track name:Forced`). The forced flag is for MKV tracks and MP4 subtitle tracks.
 
 ```sh
 ./mau --set track --track 3 --kind sub --lang Spanish --name "Latino" --forced-flag yes --file video.mkv
@@ -1098,7 +1099,7 @@ actions (may be combined; they run in the order given):
   -g, --get <{lang}>
           get the default language, or with --lang the tracks in a language
   -c, --set <{lang,default,name,forced,unforced,order,track}>
-          name: set the name of track --track to --name; forced, unforced: set or clear its forced flag (MKV); track: change the language (--lang), name (--name) and forced flag (--forced-flag) of track --track together; order: put the tracks of --kind in the order of --order; lang: make --default (or the first of --prefer) the default, or with --lang set the language of track --track (1); default: make track --track the default, and with --lang set its language
+          name: set the name of track --track to --name; forced, unforced: set or clear its forced flag (MKV, and MP4 subtitles); track: change the language (--lang), name (--name) and forced flag (--forced-flag) of track --track together; order: put the tracks of --kind in the order of --order; lang: make --default (or the first of --prefer) the default, or with --lang set the language of track --track (1); default: make track --track the default, and with --lang set its language
   -a, --add <{subtitle}>
           subtitle: add the subtitle file --sub-file to an MKV or MP4 as a new subtitle track in the language --lang (and the name --name); not default, not forced
   -S, --search <{subtitle}>
@@ -1129,7 +1130,7 @@ settings:
       --sub-id <ID>             with --add subtitle --online: the ID of a subtitle that --search subtitle listed
       --query <TEXT>            for --search subtitle and --add subtitle --online: the title to search for, instead of the one the file name says
       --sub-file <FILE>         for --add subtitle: the subtitle file (.srt, .ass, .ssa, .vtt or .sup) to add; the file is rewritten
-      --forced-flag <{yes,no}>  for --set track: set (yes) or clear (no) the forced flag of the track (MKV only)
+      --forced-flag <{yes,no}>  for --set track: set (yes) or clear (no) the forced flag of the track (MKV, and MP4 subtitle tracks)
       --order-lang <LANGS>      for --set order, instead of --order: languages in the order their tracks should come, e.g. ita,eng; tracks in other languages follow. Works on files whose tracks differ, so one command suits a whole season
       --default-first...        with --set order, also make the track that ends up first the only default of its kind, for players that follow the flag and players that play the first track
       --order <N,N,...>         for --set order: the current number of each track of the kind, in the order they should have, e.g. 2,1,3 swaps the first two of three; the file is rewritten
