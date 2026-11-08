@@ -14,6 +14,8 @@ serde_json.workspace = true
 chrono.workspace = true
 unicode-normalization.workspace = true
 sha2 = "0.10"
+# the zlib streams of compressed Matroska blocks (PGS subtitles are often stored this way); pure Rust, already in the tree
+miniz_oxide = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

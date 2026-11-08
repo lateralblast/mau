@@ -126,15 +126,32 @@ check them by hand before relying on them.
   checked, including accented text and millisecond times. The WebVTT and TTML readers follow the MP4 specification
   and are checked against files made for the tests, since ffmpeg in the test environment can't read those two
   tracks. CEA-608 captions (`c608`) need a caption decoder and are refused with a message.
+- In a build with `native-mkv`, the subtitles of an MKV are extracted in this program in these formats, each
+  byte for byte as `mkvextract` writes it (checked against `mkvextract` on test files): SubRip (`.srt`),
+  SubStationAlpha (`.ass`), PGS (`.sup`), VobSub (`.idx` with its `.sub` beside it) and WebVTT (`.vtt`, for both
+  the `S_TEXT/WEBVTT` and the `D_WEBVTT/SUBTITLES` codec IDs). A PGS track whose blocks are zlib-compressed is
+  inflated (the `miniz_oxide` crate); header-stripped blocks get their bytes back. A VobSub picture bigger than a
+  sector is split over sectors as `mkvextract` splits it. The `D_WEBVTT` form has no `mkvextract` reference (it
+  can't read that codec ID), so it is checked by reading the output back with ffmpeg. Subtitles of other codecs
+  are still refused as they were. Adding a SubRip, ASS, SSA or WebVTT file to an MKV (`--add subtitle`) is native
+  too: the track is written with its codec (`S_TEXT/UTF8`; `S_TEXT/ASS` or `S_TEXT/SSA` with the header as its codec
+  private data; `S_TEXT/WEBVTT` with the WebVTT header, and each cue's settings and identifier as its block addition).
+  SubRip, ASS and WebVTT tracks read back from `mkvextract` the same as `mkvmerge`'s track. An SSA file stays SSA,
+  where `mkvmerge` makes it ASS, so it is checked by the text ffmpeg reads from each. A WebVTT file with a NOTE, STYLE
+  or REGION block after its first cue goes through mkvmerge, as that block has no place in the track here.
 - In a build with `native-avi`, the audio streams of an AVI are put in order in place (`--swap`): the stream
   lists are reordered and the stream numbers in the chunks and the index are renamed, and nothing changes
-  size. An AVI with an OpenDML index (`indx`) is refused, where the ffmpeg path would swap it. Removing a
+  size. An AVI with an OpenDML index (`indx`) is refused, where the ffmpeg path would swap it. The in-place swap
+  also needs the stream lists to be one run (nothing between them); a file with a `JUNK` chunk between two of its
+  stream lists is refused with a message, and left as it was. Removing a
   stream (`--delete track`) is native too: the file is written again, with the stream's chunks and index entries
   left out, the stream numbers after it moved down, each index offset moved to where its chunk now is, and the
   header's stream count changed. It is read back before it replaces the file. The same OpenDML refusal applies.
   The streams come from the header's `strl` lists, not from `mediainfo`: with `native-avi` the track list that
   `--info`, the Edit dialog and the removal use is read from the same lists (`avi::stream_tracks`), so an AVI whose
-  chunks are in `rec ` lists lists its real streams. `mediainfo` is not needed for an AVI's info, get, delete or
+  chunks are in `rec ` lists lists its real streams. The index may count its offsets from the `movi` fourcc or
+  from the start of the file (old writers did the latter); the file keeps the convention it had, and a `rec ` list
+  whose streams are all removed is dropped with its entry. `mediainfo` is not needed for an AVI's info, get, delete or
   preserve in that build. Codec names follow mediainfo's for the common codecs.
 - In a build with `native-detect` on macOS, the clips of an MKV for `--detect` are decoded with Apple's
   AudioToolbox, not ffmpeg: the sound is close to ffmpeg's (correlation 0.95 to 0.99 on the files checked), and

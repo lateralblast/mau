@@ -407,8 +407,47 @@ fn native_detect() -> bool {
 }
 
 /// Whether a subtitle file is SubRip, by its name.
-fn is_srt(file: &str) -> bool {
-    Path::new(file).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("srt"))
+
+/// Whether a subtitle file is one this program writes to an MKV in its own codec (SubRip, ASS, SSA or WebVTT).
+fn is_native_mkv_text(file: &str) -> bool {
+    Path::new(file).extension().is_some_and(|ext| ["srt", "ass", "ssa", "vtt"].iter().any(|k| ext.eq_ignore_ascii_case(k)))
+}
+
+/// Whether a subtitle file can be written to an MKV in this program: a file that is not, for a reason this program
+/// can't write (a WebVTT note after its first cue), is left to mkvmerge, and so is not an error here.
+fn mkv_text_writable(path: &Path) -> bool {
+    match read_mkv_text(path) {
+        Err(error) => error.kind() != io::ErrorKind::Unsupported,
+        Ok(_) => true,
+    }
+}
+
+/// A subtitle file as an MKV track: its codec ID, the codec private data (the ASS header; none for SubRip), and its
+/// cues (the payload of an ASS cue is the block's, see `text_subs::read_ass_for_mkv`).
+fn read_mkv_text(path: &Path) -> io::Result<(&'static str, Option<Vec<u8>>, Vec<crate::ebml_edit::NewCue>)> {
+    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if extension == "vtt" {
+        let (header, cues) = crate::text_subs::read_vtt_for_mkv(path)?;
+        let cues = cues
+            .into_iter()
+            .map(|(start_ms, end_ms, text, additions)| crate::ebml_edit::NewCue { start_ms, end_ms, text, additions })
+            .collect();
+        return Ok(("S_TEXT/WEBVTT", Some(header), cues));
+    }
+    if extension == "ass" || extension == "ssa" {
+        let (header, cues) = if extension == "ssa" {
+            crate::text_subs::read_ssa_for_mkv(path)?
+        } else {
+            crate::text_subs::read_ass_for_mkv(path)?
+        };
+        let cues = cues
+            .into_iter()
+            .map(|(start_ms, end_ms, text)| crate::ebml_edit::NewCue { start_ms, end_ms, text, additions: vec![] })
+            .collect();
+        let codec = if extension == "ssa" { "S_TEXT/SSA" } else { "S_TEXT/ASS" };
+        return Ok((codec, Some(header), cues));
+    }
+    Ok(("S_TEXT/UTF8", None, crate::ebml_subs::read_srt(path)?))
 }
 
 /// Whether a subtitle file is one this program reads and writes to an MP4 (SubRip, SubStationAlpha or WebVTT).
@@ -449,6 +488,9 @@ pub fn subtitle_extension(container: Container, codec: &str) -> Option<&'static 
         Some("vtt")
     } else if codec.contains("pgs") {
         Some("sup")
+    } else if codec.contains("dvd_subtitle") || codec.contains("vobsub") {
+        // a VobSub is two files: the index (this name) and the .sub beside it
+        Some("idx")
     } else {
         None
     }
@@ -2678,7 +2720,10 @@ impl Mau {
             return worker.add_to_mp4(media, result, &specs, &all);
         }
         // SubRip files are added to an MKV in this program (the native-mkv feature, see ebml_edit)
-        if cfg!(feature = "native-mkv") && specs.iter().all(|spec| is_srt(&spec.file)) {
+        if cfg!(feature = "native-mkv")
+            && specs.iter().all(|spec| is_native_mkv_text(&spec.file))
+            && specs.iter().all(|spec| self.config.dryrun || mkv_text_writable(Path::new(&spec.file)))
+        {
             return worker.add_srt_natively(media, result, &specs, &all);
         }
         // the tools for the other subtitle files (the native build needs none for SubRip)
@@ -2787,12 +2832,14 @@ impl Mau {
             ));
             // a dry run does not open the file (an online subtitle's placeholder is not there), as the mkvmerge path does not
             if !self.config.dryrun {
-                match crate::ebml_subs::read_srt(Path::new(&spec.file)) {
-                    Ok(cues) => new_tracks.push(crate::ebml_edit::NewSubtitleTrack {
+                match read_mkv_text(Path::new(&spec.file)) {
+                    Ok((codec, private, cues)) => new_tracks.push(crate::ebml_edit::NewSubtitleTrack {
                         language: spec.lang.clone(),
                         name: spec.name.clone(),
                         forced: spec.forced,
                         cues,
+                        codec,
+                        private,
                     }),
                     Err(error) => {
                         result.error(format!("could not read {}: {}", spec.file, strerror(&error)));
@@ -3075,13 +3122,27 @@ impl Mau {
             ));
         }
         let temp_file = temp_path(&out_text);
+        // a VobSub's .sub goes beside its index, under the same name
+        let companion = (track.codec == "dvd_subtitle" && media.container == Container::Mkv).then(|| out.with_extension("sub"));
+        if let Some(sub) = &companion {
+            if sub.exists() && !(explicit && self.config.force) {
+                return Ok(skip(
+                    result,
+                    &format!("{} already exists (name another file with --output, or use --force to replace it)", sub.display()),
+                ));
+            }
+        }
+        let temp_sub = companion.as_ref().map(|sub| temp_path(&sub.to_string_lossy()));
         result.changes.push(format!("extracted {} ({}) to {out_text}", track.label(), track.language));
         self.pend(&temp_file);
+        if let Some(temp_sub) = &temp_sub {
+            self.pend(temp_sub);
+        }
         // a text track of an MKV is written in this program (the native-mkv feature, see ebml_subs), and so is the
         // mov_text track of an MP4 (the native-mp4 feature, see mp4::read_text_cues)
         let native_mkv = cfg!(feature = "native-mkv")
             && media.container == Container::Mkv
-            && matches!(track.codec.as_str(), "subrip" | "ass");
+            && matches!(track.codec.as_str(), "subrip" | "ass" | "hdmv_pgs_subtitle" | "dvd_subtitle" | "D_WEBVTT/SUBTITLES" | "S_TEXT/WEBVTT");
         let native_mp4 = cfg!(feature = "native-mp4") && media.container == Container::Mp4;
         let native = native_mkv || native_mp4;
         let done = if native_mp4 {
@@ -3111,7 +3172,20 @@ impl Mau {
                 true
             } else {
                 let track_number = track.id as u64 + 1;
-                if let Err(error) = crate::ebml_subs::write_subtitles(Path::new(&media.path), track_number, extension, Path::new(&temp_file)) {
+                let written = match (track.codec.as_str(), &temp_sub) {
+                    ("hdmv_pgs_subtitle", _) => crate::ebml_subs::write_pgs(Path::new(&media.path), track_number, Path::new(&temp_file)),
+                    ("D_WEBVTT/SUBTITLES", _) => crate::ebml_subs::write_webvtt(Path::new(&media.path), track_number, Path::new(&temp_file)),
+                    ("S_TEXT/WEBVTT", _) => crate::ebml_subs::write_webvtt_text(Path::new(&media.path), track_number, Path::new(&temp_file)),
+                    ("dvd_subtitle", Some(temp_sub)) => crate::ebml_subs::write_vobsub(
+                        Path::new(&media.path),
+                        track_number,
+                        &track.language,
+                        Path::new(&temp_file),
+                        Path::new(temp_sub),
+                    ),
+                    _ => crate::ebml_subs::write_subtitles(Path::new(&media.path), track_number, extension, Path::new(&temp_file)),
+                };
+                if let Err(error) = written {
                     result.error(format!("could not extract the subtitles: {}", strerror(&error)));
                 }
                 result.status != Status::Error
@@ -3135,12 +3209,22 @@ impl Mau {
                 result.error(message);
             } else if let Err(error) = fs::rename(&temp_file, &out) {
                 result.error(format!("could not write {out_text}: {}", strerror(&error)));
+            } else if let (Some(temp_sub), Some(sub)) = (&temp_sub, &companion) {
+                if let Err(error) = fs::rename(temp_sub, sub) {
+                    result.error(format!("could not write {}: {}", sub.display(), strerror(&error)));
+                }
             }
         }
         if result.status == Status::Error {
             let _ = fs::remove_file(&temp_file);
+            if let Some(temp_sub) = &temp_sub {
+                let _ = fs::remove_file(temp_sub);
+            }
         }
         self.shared.pending.lock().unwrap().retain(|p| p != &temp_file);
+        if let Some(temp_sub) = &temp_sub {
+            self.shared.pending.lock().unwrap().retain(|p| p != temp_sub);
+        }
         result.data = json!({"output": out_text});
         Ok(result)
     }

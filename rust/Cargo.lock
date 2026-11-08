@@ -1854,6 +1854,7 @@ version = "1.6.7"
 dependencies = [
  "chrono",
  "libc",
+ "miniz_oxide 0.8.9",
  "serde",
  "serde_json",
  "sha2",
