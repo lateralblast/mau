@@ -14,6 +14,9 @@
 - Only about 60 languages are built in; other names and two letter codes are rejected, and only three letter codes pass through, so a valid language outside the table needs its ISO 639-2 code
 - Actions that find nothing to do (no track in that language, a format that doesn't support the action) print a warning but exit 0, so a script cannot tell nothing was changed
 
+- `./build.sh --target mac --sandboxed --dry-run` (a local build) is not a dry run: it builds, signs and writes `dist/`, and stages the bundled tools. Only the release and CI paths honour `--dry-run`
+- `./mau --gui --sandboxed` rebuilds a stale sandboxed app before opening it, which takes minutes and writes new installers into `dist/`; no cleanup of old installers
+
 ## In Progress
 
 ## Done
