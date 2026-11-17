@@ -5,12 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.11] - 2026-11-17
+## [1.7.3] - 2026-11-17
+
+### Fixed
+- The OpenSubtitles request file and the downloaded subtitle are no longer written through a link planted in the shared temporary folder. The request file (which holds the API key, user name and password) is now created only if nothing is at that name, and a leftover file or link at the download's name is removed before `curl` writes it.
+
+## [1.7.2] - 2026-11-17
+
+### Fixed
+- Adding an ASS, SSA or WebVTT subtitle file (`--add subtitle`) no longer panics on a UTF-8 file with a line of non-ASCII text (Japanese, Russian and so on) in the `[Script Info]` or `[Events]` section, such as `Title: 日本語`. The check for a `Dialogue:` or `Format:` key cut the line at a byte that could be inside a character.
+
+## [1.7.1] - 2026-11-17
 
 ### Fixed
 - Reading a laced Matroska block (`ebml_subs.rs`, used when subtitles are extracted and by `--detect`) no longer lets lace sizes add up past the end of the number range, which could skip the length check and panic. A laced block of one frame with EBML lacing, which has no sizes, is now read as one frame instead of being refused or misread.
 
-## [1.6.10] - 2026-11-17
+## [1.7.0] - 2026-11-17
 
 ### Fixed
 - A corrupt MP4 whose box says it is almost 2^64 bytes long no longer wraps the position around in the native MP4 reader (`boxes` and `read_moov`). Such a box is now treated as not a box, so the scan stops and the file is refused (`no moov box`) instead of looping or panicking.

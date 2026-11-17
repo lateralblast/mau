@@ -29,8 +29,11 @@ Status: `[ ]` open, `[~]` in progress, `[x]` done.
 
 ## Done
 
-- [x] Corrupt MP4 box sizes no longer wrap the position around in the native reader (1.6.10).
-- [x] Laced MKV blocks: lace sizes are added with a check, and a one-frame EBML lace is read (1.6.11).
+- [x] A UTF-8 subtitle file with non-ASCII text no longer panics the ASS reader (1.7.2).
+- [x] The OpenSubtitles request file and download are not written through a planted link (1.7.3).
+
+- [x] Corrupt MP4 box sizes no longer wrap the position around in the native reader (1.7.0).
+- [x] Laced MKV blocks: lace sizes are added with a check, and a one-frame EBML lace is read (1.7.1).
 
 - [x] `--detect` decodes HE-AAC and HE-AAC v2 tracks natively on macOS (1.6.9). The AAC setup data is passed to Apple's converter in an `esds` box; without it the converter refuses the frames. Checked against ffmpeg: v2 0.988, v1 1.000, AAC-LC 1.000 (`an_he_aac_v2_clip_is_the_same_sound_as_ffmpeg_makes`).
 - [x] Fix the three engine tests that failed under `--features no-mkvtoolnix` (they assumed the default tool list). Part of 1.6.8.

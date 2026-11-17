@@ -72,8 +72,24 @@ pub fn save_credentials(credentials: &Credentials) -> Result<(), String> {
 
 /// Write a file that only its owner can read.
 fn private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_private(path, bytes, false)
+}
+
+/// Write a file that only its owner can read, and only if there is nothing at `path` yet: in a folder that others can
+/// write to (the temporary folder) a name that is easy to guess could be a link to a file of the owner's, which
+/// writing to would overwrite, and a file that was there already could be readable by others.
+fn private_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_private(path, bytes, true)
+}
+
+fn write_private(path: &Path, bytes: &[u8], new_only: bool) -> std::io::Result<()> {
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true);
+    if new_only {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -265,7 +281,7 @@ fn api(base: &str, credentials: &Credentials, path: &str, body: Option<&Value>, 
     config.push_str("write-out = \"\\n%{http_code}\"\n");
     let file = std::env::temp_dir()
         .join(format!("mau-curl-{}-{}.conf", std::process::id(), CONFIGS.fetch_add(1, Ordering::SeqCst)));
-    private_file(&file, config.as_bytes()).map_err(|e| format!("could not prepare the request: {e}"))?;
+    private_new_file(&file, config.as_bytes()).map_err(|e| format!("could not prepare the request: {e}"))?;
     let ran = run_command(&["curl".to_string(), "--config".to_string(), file.to_string_lossy().into_owned()]);
     let _ = fs::remove_file(&file);
     let done = match ran {
@@ -401,6 +417,8 @@ fn download_at(base: &str, credentials: &Credentials, file_id: i64) -> Result<Pa
         .filter(|e| SUBTITLE_FILES.contains(&e.as_str()))
         .unwrap_or_else(|| "srt".into());
     let target = std::env::temp_dir().join(format!("{TEMP_PREFIX}{file_id}.{extension}"));
+    // a name that others could have made a link to a file of ours is cleared first (removing a link removes only the link)
+    let _ = fs::remove_file(&target);
     let cmd: Vec<String> = ["curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output"]
         .iter()
         .map(|s| s.to_string())
@@ -437,6 +455,25 @@ pub fn forget_download(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_file_is_never_written_over_something_that_is_there() {
+        let dir = std::env::temp_dir().join(format!("mau-private-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target.txt");
+        fs::write(&target, "keep").unwrap();
+        let link = dir.join("request.conf");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(not(unix))]
+        fs::write(&link, "there").unwrap();
+        assert!(private_new_file(&link, b"secret").is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
+        let free = dir.join("free.conf");
+        private_new_file(&free, b"secret").unwrap();
+        assert_eq!(fs::read_to_string(&free).unwrap(), "secret");
+        let _ = fs::remove_dir_all(&dir);
+    }
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
 

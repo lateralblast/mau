@@ -185,8 +185,11 @@ fn parse_ass(data: &[u8]) -> io::Result<Vec<Cue>> {
 
 /// The rest of a line after `key` (matched without regard to case), if the line starts with it.
 fn strip_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    if line.len() >= key.len() && line[..key.len()].eq_ignore_ascii_case(key) {
-        Some(line[key.len()..].trim_start())
+    // compared as bytes: a line of non-ASCII text can have a character that spans the end of the key, and slicing the
+    // string there would panic. When the bytes match, the key is ASCII, so the cut is on a character boundary.
+    let head = line.as_bytes().get(..key.len())?;
+    if head.eq_ignore_ascii_case(key.as_bytes()) {
+        line.get(key.len()..).map(str::trim_start)
     } else {
         None
     }
@@ -326,6 +329,22 @@ mod tests {
     }
 
     #[test]
+    fn lines_of_non_ascii_text_are_not_cut_in_the_middle_of_a_character() {
+        // the key `format:` is 7 bytes and `dialogue:` 9, and each of these lines has a character across that byte
+        let data = "[Script Info]\nTitle: 日本語\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n日本語です\nDialogue: 0,0:00:00.50,0:00:02.00,Default,,0,0,0,,こんにちは\n".as_bytes();
+        let cues = parse_ass(data).unwrap();
+        assert_eq!(cues, vec![(500, 2000, "こんにちは".as_bytes().to_vec())]);
+        let dir = std::env::temp_dir().join(format!("mau-ass-utf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("utf8.ass");
+        std::fs::write(&path, data).unwrap();
+        let (header, cues) = read_ass_for_mkv(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(String::from_utf8(header).unwrap().contains("Title: 日本語"));
+        assert_eq!(cues.len(), 1);
+    }
+
+    #[test]
     fn ass_times_are_centiseconds_or_milliseconds() {
         assert_eq!(ass_time("1:02:03.45").unwrap(), 3723450);
         assert_eq!(ass_time("0:00:01.234").unwrap(), 1234);
@@ -347,3 +366,4 @@ mod tests {
         assert!(parse_vtt(b"1\n00:00:00,000 --> 00:00:01,000\nnot webvtt\n").is_err());
     }
 }
+
