@@ -407,24 +407,28 @@ pub(crate) fn lace_frames(flags: u8, data: &[u8]) -> io::Result<Vec<&[u8]>> {
         }
         // EBML: the first size is an unsigned vint, the others are signed differences from the one before
         _ => {
-            let (first, used) = unsigned_vint(&data[at..]).ok_or_else(bad)?;
-            at += used;
-            sizes.push(first as usize);
-            let mut previous = first as i64;
-            for _ in 0..count.saturating_sub(2) {
-                let (raw, used) = unsigned_vint(&data[at..]).ok_or_else(bad)?;
+            // one frame has no sizes at all (the last frame takes what is left)
+            if count > 1 {
+                let (first, used) = unsigned_vint(&data[at..]).ok_or_else(bad)?;
                 at += used;
-                let bias = (1i64 << (7 * used as i64 - 1)) - 1;
-                previous += raw as i64 - bias;
-                if previous < 0 {
-                    return Err(bad());
+                sizes.push(usize::try_from(first).map_err(|_| bad())?);
+                let mut previous = i64::try_from(first).map_err(|_| bad())?;
+                for _ in 0..count - 2 {
+                    let (raw, used) = unsigned_vint(&data[at..]).ok_or_else(bad)?;
+                    at += used;
+                    let bias = (1i64 << (7 * used as i64 - 1)) - 1;
+                    let delta = i64::try_from(raw).map_err(|_| bad())? - bias;
+                    previous = previous.checked_add(delta).ok_or_else(bad)?;
+                    if previous < 0 {
+                        return Err(bad());
+                    }
+                    sizes.push(previous as usize);
                 }
-                sizes.push(previous as usize);
             }
         }
     }
-    let used: usize = sizes.iter().sum();
-    if at + used > data.len() {
+    let used = sizes.iter().try_fold(0usize, |sum, &size| sum.checked_add(size)).ok_or_else(bad)?;
+    if used > data.len() - at {
         return Err(bad());
     }
     let mut frames = Vec::with_capacity(count);
@@ -1113,6 +1117,14 @@ mod tests {
         // a size that runs past the data is refused, not read past the end
         assert!(lace_frames(0x02, &[1u8, 200, b'a']).is_err());
         assert!(lace_frames(0x04, &[1u8, b'a', b'b', b'c']).is_err());
+        // sizes that are far more than the data are refused
+        let mut huge = vec![1u8];
+        huge.extend_from_slice(&[255; 40]);
+        huge.push(0);
+        assert!(lace_frames(0x02, &huge).is_err());
+        // an EBML laced block of one frame has no sizes
+        let one = lace_frames(0x06, &[0u8, b'x', b'y']).unwrap();
+        assert_eq!(one, vec![&[b'x', b'y'][..]]);
     }
 
     /// The duration each real MKV named in MAU_DURATION_CHECK (separated by `:`) has, from its Info element, must

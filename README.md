@@ -6,7 +6,7 @@
 **Media Audio Utility**: change the default audio and subtitle tracks of your
 media files, and tidy their tracks, from the command line or a desktop app.
 
-Version 1.6.9
+Version 1.6.11
 
 ![The mau desktop app](docs/images/app-main.png)
 

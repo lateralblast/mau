@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.11] - 2026-11-17
+
+### Fixed
+- Reading a laced Matroska block (`ebml_subs.rs`, used when subtitles are extracted and by `--detect`) no longer lets lace sizes add up past the end of the number range, which could skip the length check and panic. A laced block of one frame with EBML lacing, which has no sizes, is now read as one frame instead of being refused or misread.
+
+## [1.6.10] - 2026-11-17
+
+### Fixed
+- A corrupt MP4 whose box says it is almost 2^64 bytes long no longer wraps the position around in the native MP4 reader (`boxes` and `read_moov`). Such a box is now treated as not a box, so the scan stops and the file is refused (`no moov box`) instead of looping or panicking.
+
 ## [1.6.9] - 2026-11-09
 
 ### Fixed

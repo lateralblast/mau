@@ -39,7 +39,8 @@ fn boxes(data: &[u8], start: usize, end: usize) -> Vec<([u8; 4], usize, usize, u
             }
             size => (8, size),
         };
-        if size < header as u64 || at as u64 + size > end as u64 {
+        // a size read from the file can be anything: the sum must not wrap around
+        if size < header as u64 || at as u64 + header as u64 > end as u64 || size > (end - at) as u64 {
             break; // not a box: stop rather than guess
         }
         found.push((kind, at, at + header, at + size as usize));
@@ -133,7 +134,11 @@ pub fn read_track_flags(path: &Path) -> io::Result<Vec<TrackFlag>> {
             file.read_exact(&mut moov)?;
             return Ok(parse_track_flags(&moov, at));
         }
-        at += size;
+        // a size that runs past the end of the file ends the search (and cannot wrap the position around)
+        match at.checked_add(size) {
+            Some(next) if next <= length => at = next,
+            _ => break,
+        }
     }
     Err(io::Error::new(io::ErrorKind::InvalidData, "no moov box: not an MP4 file"))
 }
@@ -490,7 +495,11 @@ fn read_moov(path: &Path) -> io::Result<(u64, Vec<u8>)> {
             file.read_exact(&mut moov)?;
             return Ok((at, moov));
         }
-        at += size;
+        // a size that runs past the end of the file ends the search (and cannot wrap the position around)
+        match at.checked_add(size) {
+            Some(next) if next <= length => at = next,
+            _ => break,
+        }
     }
     Err(io::Error::new(io::ErrorKind::InvalidData, "no moov box: not an MP4 file"))
 }
@@ -1131,6 +1140,37 @@ pub fn add_text_tracks(source: &Path, dest: &Path, new: &[NewText], changes: &[T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A box whose 64-bit size would wrap the position around if it were added without a check.
+    fn wrapping_box() -> Vec<u8> {
+        let mut out = 1u32.to_be_bytes().to_vec();
+        out.extend_from_slice(b"free");
+        out.extend_from_slice(&(u64::MAX - 7).to_be_bytes());
+        out.extend_from_slice(&[0u8; 16]);
+        out
+    }
+
+    #[test]
+    fn a_box_size_that_would_wrap_around_is_not_a_box() {
+        let mut data = make_box(b"ftyp", b"isom");
+        let first = data.len();
+        data.extend(wrapping_box());
+        let found = boxes(&data, 0, data.len());
+        assert_eq!(found.len(), 1, "only the ftyp box is found");
+        assert_eq!(found[0].1, 0);
+        assert_eq!(first, 12);
+    }
+
+    #[test]
+    fn a_box_size_that_would_wrap_around_ends_the_search_for_the_moov() {
+        let dir = std::env::temp_dir().join(format!("mau-wrap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wrap.mp4");
+        std::fs::write(&path, [make_box(b"ftyp", b"isom"), wrapping_box()].concat()).unwrap();
+        let result = read_moov(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_err());
+    }
 
     fn make_box(kind: &[u8; 4], content: &[u8]) -> Vec<u8> {
         let mut out = ((content.len() + 8) as u32).to_be_bytes().to_vec();
